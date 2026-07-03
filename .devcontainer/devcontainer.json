@@ -21,9 +21,9 @@
       }
     }
   },
-"runArgs": ["--network=host"],
-"postStartCommand": "mkdir -p ~/.claude && cp /tmp/host-claude/.credentials.json ~/.claude/.credentials.json && chmod 600 ~/.claude/.credentials.json || true",
-  "postCreateCommand": "echo 'Container ready. Run: make sim TB=<testbench_name>'",
+  "runArgs": ["--network=host", "--privileged"],
+  "postStartCommand": "mkdir -p ~/.claude && cp /tmp/host-claude/.credentials.json ~/.claude/.credentials.json && chmod 600 ~/.claude/.credentials.json || true",
+  "postCreateCommand": "echo 'Container ready. Simulation: make sim TB=<name> | FPGA: make fpga TOP=<entity> XDC=<file.xdc>'",
   "otherPortsAttributes": {
     "onAutoForward": "silent"
   }
