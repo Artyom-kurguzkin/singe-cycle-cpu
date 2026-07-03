@@ -1,0 +1,7 @@
+work/*
+waves/*
+assets/*
+!assets/.gitkeep
+!work/.gitkeep
+!waves/.gitkeep
+.claude/*
