@@ -60,82 +60,84 @@ begin
         -- ---- Opcode 000: Addition (A + B + Cin) ----
         -- 0+0+0 = 0, carry 0
         apply(Opcode, InputA, InputB, CarryIn, "000", '0', '0', '0');
-        assert Output = '0' and CarryOut = '0' report "ADD 0+0+0 FAILED" severity error;
+        assert Output = '0' and CarryOut = '0' report "ADD 0+0+0 FAILED" severity failure;
 
         -- 1+0+0 = 1, carry 0
         apply(Opcode, InputA, InputB, CarryIn, "000", '1', '0', '0');
-        assert Output = '1' and CarryOut = '0' report "ADD 1+0+0 FAILED" severity error;
+        assert Output = '1' and CarryOut = '0' report "ADD 1+0+0 FAILED" severity failure;
 
         -- 1+1+0 = 0, carry 1
         apply(Opcode, InputA, InputB, CarryIn, "000", '1', '1', '0');
-        assert Output = '0' and CarryOut = '1' report "ADD 1+1+0 FAILED" severity error;
+        assert Output = '0' and CarryOut = '1' report "ADD 1+1+0 FAILED" severity failure;
 
         -- 1+1+1 = 1, carry 1
         apply(Opcode, InputA, InputB, CarryIn, "000", '1', '1', '1');
-        assert Output = '1' and CarryOut = '1' report "ADD 1+1+1 FAILED" severity error;
+        assert Output = '1' and CarryOut = '1' report "ADD 1+1+1 FAILED" severity failure;
 
         -- ---- Opcode 001: Subtraction (A - B via A + NOT(B) + Cin) ----
         -- 1-0: A=1, B=0 -> A+NOT(B)+Cin = 1+1+0 = 0 carry 1
         apply(Opcode, InputA, InputB, CarryIn, "001", '1', '0', '0');
-        assert Output = '0' and CarryOut = '1' report "SUB 1-0 FAILED" severity error;
+        assert Output = '0' and CarryOut = '1' report "SUB 1-0 FAILED" severity failure;
 
         -- 1-1: A=1, B=1 -> 1+0+0 = 1 carry 0
         apply(Opcode, InputA, InputB, CarryIn, "001", '1', '1', '0');
-        assert Output = '1' and CarryOut = '0' report "SUB 1-1 FAILED" severity error;
+        assert Output = '1' and CarryOut = '0' report "SUB 1-1 FAILED" severity failure;
 
         -- ---- Opcode 010: AND ----
         apply(Opcode, InputA, InputB, CarryIn, "010", '0', '0', '0');
-        assert Output = '0' report "AND 0,0 FAILED" severity error;
+        assert Output = '0' report "AND 0,0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "010", '1', '0', '0');
-        assert Output = '0' report "AND 1,0 FAILED" severity error;
+        assert Output = '0' report "AND 1,0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "010", '1', '1', '0');
-        assert Output = '1' report "AND 1,1 FAILED" severity error;
+        assert Output = '1' report "AND 1,1 FAILED" severity failure;
 
         -- ---- Opcode 011: OR ----
         apply(Opcode, InputA, InputB, CarryIn, "011", '0', '0', '0');
-        assert Output = '0' report "OR 0,0 FAILED" severity error;
+        assert Output = '0' report "OR 0,0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "011", '1', '0', '0');
-        assert Output = '1' report "OR 1,0 FAILED" severity error;
+        assert Output = '1' report "OR 1,0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "011", '0', '1', '0');
-        assert Output = '1' report "OR 0,1 FAILED" severity error;
+        assert Output = '1' report "OR 0,1 FAILED" severity failure;
 
         -- ---- Opcode 100: XOR ----
         apply(Opcode, InputA, InputB, CarryIn, "100", '0', '0', '0');
-        assert Output = '0' report "XOR 0,0 FAILED" severity error;
+        assert Output = '0' report "XOR 0,0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "100", '1', '0', '0');
-        assert Output = '1' report "XOR 1,0 FAILED" severity error;
+        assert Output = '1' report "XOR 1,0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "100", '1', '1', '0');
-        assert Output = '0' report "XOR 1,1 FAILED" severity error;
+        assert Output = '0' report "XOR 1,1 FAILED" severity failure;
 
         -- ---- Opcode 101: NOT A ----
         apply(Opcode, InputA, InputB, CarryIn, "101", '0', '0', '0');
-        assert Output = '1' report "NOT 0 FAILED" severity error;
+        assert Output = '1' report "NOT 0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "101", '1', '0', '0');
-        assert Output = '0' report "NOT 1 FAILED" severity error;
+        assert Output = '0' report "NOT 1 FAILED" severity failure;
 
         -- ---- Opcode 110: Left Bit Shift passthrough ----
         -- Output = InputA, CarryOut = InputB (bit shifted out)
         apply(Opcode, InputA, InputB, CarryIn, "110", '1', '0', '0');
-        assert Output = '1' and CarryOut = '0' report "LBS A=1,B=0 FAILED" severity error;
+        assert Output = '1' and CarryOut = '0' report "LBS A=1,B=0 FAILED" severity failure;
 
         apply(Opcode, InputA, InputB, CarryIn, "110", '0', '1', '0');
-        assert Output = '0' and CarryOut = '1' report "LBS A=0,B=1 FAILED" severity error;
+        assert Output = '0' and CarryOut = '1' report "LBS A=0,B=1 FAILED" severity failure;
 
         -- ---- Opcode 111: Increment (A + 1) ----
+        -- inc computes A + CarryIn, so the caller must seed CarryIn='1' to get +1
+        -- (this is what alu_toplevel.vhd's carry(0) seeding does for real usage)
         -- 0+1 = 1, carry 0
-        apply(Opcode, InputA, InputB, CarryIn, "111", '0', '0', '0');
-        assert Output = '1' and CarryOut = '0' report "INC 0 FAILED" severity error;
+        apply(Opcode, InputA, InputB, CarryIn, "111", '0', '0', '1');
+        assert Output = '1' and CarryOut = '0' report "INC 0 FAILED" severity failure;
 
         -- 1+1 = 0, carry 1
-        apply(Opcode, InputA, InputB, CarryIn, "111", '1', '0', '0');
-        assert Output = '0' and CarryOut = '1' report "INC 1 FAILED" severity error;
+        apply(Opcode, InputA, InputB, CarryIn, "111", '1', '0', '1');
+        assert Output = '0' and CarryOut = '1' report "INC 1 FAILED" severity failure;
 
         report "All tests passed." severity note;
         wait;
