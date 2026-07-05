@@ -39,6 +39,16 @@ descriptive names, C#-style. E.g. prefer
 Well-known domain acronyms (`ALU`, `PC`, `CPU`, `IO`) are fine as-is — the
 rule targets single-letter/cryptic names, not standard terminology.
 
+## 0c. Comment density (applies to every file under `src/`, retroactively too)
+
+Comment **heavily** — every entity/port's purpose, every non-trivial signal,
+every process/case branch, and the *why* behind each design choice (e.g. why
+a port is dual-read, why a mux exists, why a carry-in is seeded a certain
+way). This is a deliberate departure from a terser default: the report's
+method section needs to describe the VHDL in detail, so heavily-commented
+source doubles as that documentation. Apply this to already-written files
+too, not just new ones going forward.
+
 ## 1. Instruction Set (from Appendix 1 & 2 of the task PDF)
 
 ### Formats (32 bits total)
@@ -136,8 +146,9 @@ excluded from the build)
 | `alu_bit_slice_tb.vhd` | directed per-opcode tests on the bit slice in isolation |
 | `alu32.vhd` | 32× `ALUBitSlice` chained (ripple carry) via a `generate` loop — carry-seed-on-sub/inc (`CarryChain(0) <= '1' when OpCode = "001" or OpCode = "111"`), `ZeroFlag` derivation, and **opcode-dependent bit wiring for `lbs`**: since a single bit slice can't shift itself (its `"110"` case just passes `InputA` through), `alu32.vhd` feeds slice `i`'s `InputA` from `OperandA(i - 1)` (zero-filled at bit 0) instead of `OperandA(i)` when `OpCode = "110"`, via an `EffectiveOperandA` mux ahead of the generate loop — this is what actually makes `lbs` shift instead of being a no-op |
 | `alu32_tb.vhd` | directed per-funct-code tests, `AluBitSlice_tb.vhd` style |
-| `regfile.vhd` | 16×32-bit, dual async read port, single sync (clocked) write port |
-| `regfile_tb.vhd` | write/read-back on both ports, simultaneous dual-read check |
+| `register_file.vhd` | 16×32-bit, dual async read port, single sync (clocked) write port |
+| `register_file_tb.vhd` | write/read-back on both ports, simultaneous dual-read check (same reg on both ports, and two different regs at once) |
+| `register_file_alu32_integration_tb.vhd` | cross-module integration test: wires a real `RegisterFile` + `Alu32` together (no mocks) and drives a short hand-written "instruction" sequence (seed two registers, `add`, then a chained `sub` off the `add`'s result) end-to-end, proving the two already-built modules actually cooperate correctly before they get buried inside `cpu.vhd`. **Pattern going forward:** add a small integration testbench like this one whenever a new module can be meaningfully wired to an already-completed one, rather than deferring all cross-module testing to `cpu_tb.vhd`/`cpu_sieve_tb.vhd` at the very end — bugs at the seams are much cheaper to find here. |
 | `instr_mem.vhd` | 1024×32 async-read ROM, contents = `sieve_program_pkg` constant |
 | `instr_mem_tb.vhd` | spot-check a few addresses against the package constant |
 | `data_mem.vhd` | 128×32 RAM + addr-range decode driving `ioaddress`/`iodata`/`ioenable` |
@@ -239,11 +250,19 @@ Container IDs change across rebuilds — look it up by the
       `OperandA`/`OperandB`/`Result`/`ZeroFlag`/`CarryChain`/`BitIndex`. No
       `overflow`/`compl_overflow` outputs — nothing downstream in this
       project's CPU needs unsigned/signed overflow (only `ZeroFlag`, for
-      beq/bne). Verified `make sim TB=alu_bit_slice_tb` and `make sim
+      beq/bne). Verified `make sim TB=AluBitSlice_tb` and `make sim
       TB=alu32_tb` both pass (directed per-opcode tests, incl. full-width
       carry-propagation wraparound for add/inc and a correctness check on
-      the `lbs` shift value/MSB discard).
-- [ ] **Step 3** — `regfile.vhd` + `regfile_tb.vhd`
+      the `lbs` shift value/MSB discard). All source files in this step were
+      retroactively given heavy explanatory comments per section 0c.
+- [x] **Step 3** — `register_file.vhd` + `register_file_tb.vhd` (write
+      ignored without `RegisterWriteEnable`, write-then-readback, and
+      simultaneous dual-read of both two-different-registers and
+      same-register cases) + `register_file_alu32_integration_tb.vhd` (new:
+      first cross-module integration test — see the module-map entry above
+      for what it drives and why this pattern is worth repeating for later
+      steps). Verified `make sim TB=RegisterFile_tb` and `make sim
+      TB=RegisterFileAlu32IntegrationTb` both pass.
 - [ ] **Step 4** — `instr_mem.vhd` + `instr_mem_tb.vhd` (placeholder program)
 - [ ] **Step 5** — `data_mem.vhd` + `data_mem_tb.vhd`
 - [ ] **Step 6** — `control_unit.vhd` + `control_unit_tb.vhd`
