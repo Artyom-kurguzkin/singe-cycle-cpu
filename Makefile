@@ -3,7 +3,7 @@ SRCDIR  := src
 WAVEDIR := waves
 WORKDIR := work
 
-VHDL_FILES := $(shell find $(SRCDIR) -name '*.vhd')
+VHDL_FILES := $(shell find $(SRCDIR) -name '*.vhd' -not -path '$(SRCDIR)/example/*')
 
 .PHONY: analyze sim clean
 

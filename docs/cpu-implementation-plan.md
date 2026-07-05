@@ -17,8 +17,27 @@ only, **not** this assignment's spec. Do not build against it.
 
 - Sieve range: **2–127** (main spec's memory map: 128-word RAM + 128-word IO).
 - CPU style: **single-cycle** datapath (not multi-cycle/FSM).
-- Course variant: **ENGR3701** — standard ripple-carry adder (reuse
-  `ALUBitSlice` as-is). Not ENGR9781/GE, so no carry-lookahead adder needed.
+- Course variant: **ENGR3701** — standard ripple-carry adder. Not
+  ENGR9781/GE, so no carry-lookahead adder needed.
+- **`src/example/` is off-limits for the real project.** It exists solely to
+  validate the dev-environment tooling (GHDL/Makefile/testbench-severity
+  conventions — see Step 1). It is never referenced, instantiated, or
+  structurally mirrored by any file under `src/`. Every module the project
+  needs — including the ALU bit-slice — is authored fresh directly under
+  `src/`, even when the resulting design is conceptually similar to
+  Practical 2's (the report can still say it's "based on" that practical;
+  the VHDL itself is our own file, not a wrapper around the example). The
+  Makefile's `VHDL_FILES` excludes `src/example/**` for exactly this reason —
+  it also sidesteps entity-name collisions (e.g. both trees would otherwise
+  define `ALUBitSlice`).
+
+## 0b. Naming convention (applies to every new file under `src/`)
+
+No short/cryptic identifiers (no `a`, `b`, `s`, `i`, `tmp`) — use full
+descriptive names, C#-style. E.g. prefer
+`OperandA`/`OperandB`/`Result`/`ZeroFlag`/`BitIndex` over `a`/`b`/`s`/`zero`/`i`.
+Well-known domain acronyms (`ALU`, `PC`, `CPU`, `IO`) are fine as-is — the
+rule targets single-letter/cryptic names, not standard terminology.
 
 ## 1. Instruction Set (from Appendix 1 & 2 of the task PDF)
 
@@ -108,11 +127,14 @@ memory ops (load/store address calc), force ALU op to add (000).
   8 bits (covers 0-255, values 128-255 meaningful when `ioenable='1'`),
   `iodata` is 32 bits (matches the datapath width throughout).
 
-## 3. Module map (new files under `src/`, alongside untouched `src/example/`)
+## 3. Module map (new files under `src/`; `src/example/` untouched, unused,
+excluded from the build)
 
 | File | Purpose |
 |---|---|
-| `alu32.vhd` | 32× `ALUBitSlice` chained (ripple carry), widened version of `example/alu_toplevel.vhd`'s pattern — same carry-seed-on-sub/inc logic (`carry(0) <= '1' when funct = "001" or funct = "111"`), same `zero` flag derivation |
+| `alu_bit_slice.vhd` | 1-bit ALU slice, own file under `src/` (not `src/example/`, not instantiating anything from there) — `Opcode`-driven case statement for add/sub/and/or/xor/not/lbs/inc, same shape as a textbook bit-slice ALU but authored independently |
+| `alu_bit_slice_tb.vhd` | directed per-opcode tests on the bit slice in isolation |
+| `alu32.vhd` | 32× `ALUBitSlice` chained (ripple carry) via a `generate` loop — carry-seed-on-sub/inc (`CarryChain(0) <= '1' when OpCode = "001" or OpCode = "111"`), `ZeroFlag` derivation, and **opcode-dependent bit wiring for `lbs`**: since a single bit slice can't shift itself (its `"110"` case just passes `InputA` through), `alu32.vhd` feeds slice `i`'s `InputA` from `OperandA(i - 1)` (zero-filled at bit 0) instead of `OperandA(i)` when `OpCode = "110"`, via an `EffectiveOperandA` mux ahead of the generate loop — this is what actually makes `lbs` shift instead of being a no-op |
 | `alu32_tb.vhd` | directed per-funct-code tests, `AluBitSlice_tb.vhd` style |
 | `regfile.vhd` | 16×32-bit, dual async read port, single sync (clocked) write port |
 | `regfile_tb.vhd` | write/read-back on both ports, simultaneous dual-read check |
@@ -175,8 +197,12 @@ program hasn't finished by then.
 
 ## 6. How to actually run things
 
-GHDL only exists inside the devcontainer, not on the Windows host. From the
-host:
+GHDL only exists inside the devcontainer, not on the Windows host. If the
+current shell is already inside the devcontainer (check: `which ghdl`
+succeeds), just run `make sim TB=<entity>` directly — no `docker exec` needed.
+
+Only reach for Docker from a shell that is on the host, outside the
+container:
 
 ```
 docker ps --filter "label=devcontainer.local_folder=<repo path>" --format "{{.ID}} {{.Status}}"
@@ -191,12 +217,32 @@ Container IDs change across rebuilds — look it up by the
 
 - [x] **Step 1** — Fixed `Makefile`'s `VHDL_FILES` to recursively find
       `.vhd` files (was `$(wildcard $(SRCDIR)/*.vhd)`, non-recursive, matched
-      nothing since all example files live under `src/example/`; now
-      `$(shell find $(SRCDIR) -name '*.vhd')`). Verified `make sim
-      TB=AluBitSlice_tb` compiles and runs. Also fixed the pre-existing
-      `inc`-carry-in bug and `severity error`→`failure` in
-      `AluBitSlice_tb.vhd` (section 4).
-- [ ] **Step 2** — `alu32.vhd` + `alu32_tb.vhd`
+      nothing since all example files live under `src/example/`). Verified
+      `make sim TB=AluBitSlice_tb` compiles and runs against
+      `src/example/`, confirming the devcontainer/GHDL toolchain works. Also
+      fixed the pre-existing `inc`-carry-in bug and `severity
+      error`→`failure` in `src/example/AluBitSlice_tb.vhd` (section 4) —
+      purely to validate the tooling; `src/example/` was never meant to be
+      reused beyond that (see Scope decisions). Once Step 2 needed a real
+      `ALUBitSlice`, `VHDL_FILES` was narrowed to
+      `find $(SRCDIR) -name '*.vhd' -not -path '$(SRCDIR)/example/*'` so the
+      example tree is fully excluded from the real build.
+- [x] **Step 2** — `alu_bit_slice.vhd` + `alu_bit_slice_tb.vhd` (own,
+      independent 1-bit ALU slice — see Scope decisions on why this isn't
+      `src/example/ALUBitSlice.vhd`) and `alu32.vhd` + `alu32_tb.vhd` (32-bit
+      word ALU, ripple-carry chain of the above via `generate`, with the
+      opcode-dependent `lbs` shift-wiring fix described in section 3 — the
+      first draft naively widened the example's uniform per-bit wiring and
+      that made `lbs` a silent no-op, caught by directed testing before it
+      could propagate into the CPU). Ports/signals use full descriptive
+      names per section 0b, e.g.
+      `OperandA`/`OperandB`/`Result`/`ZeroFlag`/`CarryChain`/`BitIndex`. No
+      `overflow`/`compl_overflow` outputs — nothing downstream in this
+      project's CPU needs unsigned/signed overflow (only `ZeroFlag`, for
+      beq/bne). Verified `make sim TB=alu_bit_slice_tb` and `make sim
+      TB=alu32_tb` both pass (directed per-opcode tests, incl. full-width
+      carry-propagation wraparound for add/inc and a correctness check on
+      the `lbs` shift value/MSB discard).
 - [ ] **Step 3** — `regfile.vhd` + `regfile_tb.vhd`
 - [ ] **Step 4** — `instr_mem.vhd` + `instr_mem_tb.vhd` (placeholder program)
 - [ ] **Step 5** — `data_mem.vhd` + `data_mem_tb.vhd`
