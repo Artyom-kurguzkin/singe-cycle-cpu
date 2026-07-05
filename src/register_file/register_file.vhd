@@ -29,7 +29,7 @@ entity RegisterFile is
         -- The two registers' current values, exposed combinationally (see
         -- below) so the rest of the datapath can use them within the same
         -- cycle without waiting for a clock edge.
-        -- Defaulted to zero (rather than left undriven) purely so that at
+1        -- Defaulted to zero (rather than left undriven) purely so that at
         -- simulation time 0, before the concurrent assignments below have
         -- evaluated even once, these ports already reflect a defined value
         -- instead of 'U' -- otherwise a deep enough chain of structural

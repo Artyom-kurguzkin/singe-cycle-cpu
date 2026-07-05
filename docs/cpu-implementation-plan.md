@@ -164,8 +164,9 @@ build (see Scope decisions).
 | `src/data_memory/data_memory_tb.vhd` | RAM read/write in range (ignored without `MemoryWriteEnable`, captured with it); ordinary RAM store doesn't raise `IoEnable`; IO-range store raises `IoEnable`/`IoAddress`/`IoData` correctly *and* is confirmed not to have written through to RAM at the aliased index |
 | `src/integration-tests/register_file_alu32_data_memory_integration_tb.vhd` | cross-module integration test chaining all three completed modules for real `store`/`load`-shaped sequences: `RegisterFile` (rs/rt) → `Alu32` (address = rs + immediate, `OpCode` forced to add, matching the real control unit's future behaviour for memory ops) → `DataMemory` (RAM store, then a `load` reading it back, then a round trip through the register file's own write port) → a final IO-range store (address 130) checked both for the right `IoEnable` pulse and for not corrupting RAM at the aliased index (2). |
 | `src/simulation-notes/metavalue_startup_artifact_demo_tb.vhd` | **Not a module test** — a minimal, deliberately isolated reproduction of a GHDL simulation-startup artifact found while writing the integration test above: any memory address fed through even one concurrent signal assignment (instead of being a directly-driven signal) prints `NUMERIC_STD.TO_INTEGER: metavalue detected` at `@0ms`, *even when every signal involved has an explicit `'0'` initial value* — confirmed by bisection to be an inherent one-delta-cycle artifact of VHDL/GHDL elaboration (a driven signal's first computed value isn't available until its driver executes at least once), not a bug in `RegisterFile`/`DataMemory`/`Alu32`. Scoped to `@0ms` only and self-resolves within the same simulation instant; every testbench in this project already only checks results after a nonzero `wait for ...`, so it never contaminates a real assertion. This file demonstrates that explicitly (asserts a correct read-back at `@11ns` despite the `@0ms` warning) so nobody re-investigates it from scratch or mistakes it for a real bug later. **If this warning appears in any future testbench's output, it does not need investigating** — link back to this file instead. |
-| `src/control_unit/control_unit.vhd` | opcode/funct → {RegDst, ALUSrc, MemToReg, RegWrite, MemWrite, Branch, Jump, ALUOp} |
-| `src/control_unit/control_unit_tb.vhd` | truth-table style: one assert block per opcode |
+| `src/control_unit/control_unit.vhd` | `OpCode`/`FunctionCode` → `{RegisterDestinationSelect, AluSourceSelect, AluOperandAZero, MemoryToRegisterSelect, RegisterWriteEnable, MemoryWriteEnable, BranchEnable, BranchOnZero, JumpEnable, AluOpCode}` — **one signal beyond the original sketch**: `AluOperandAZero`. `load immediate` needs the ALU to compute `0 OP immediate` so the result can ride the normal ALU-result write-back path, but this ISA's r0 is an ordinary register (not hardwired zero — section 2), so relying on "r0 happens to hold zero" would be a fragile, program-specific assumption instead of a real hardware guarantee. `AluOperandAZero` forces the ALU's first operand to zero generically, and `AluOpCode` is forced to `"011"` (or) for `load immediate` specifically so `0 or immediate = immediate`. `BranchOnZero` is the "zero-flag polarity" pc_unit.vhd will need: `'1'` for `beq` (take the branch when `ZeroFlag='1'`), `'0'` for `bne` (take it when `ZeroFlag='0'`) — both force `AluOpCode = "001"` (sub) so `ZeroFlag` reflects `rs = rt`. `RegisterWriteEnable`/`MemoryWriteEnable` are named to match `RegisterFile`/`DataMemory`'s own port names exactly, so `cpu.vhd` can wire them straight across. |
+| `src/control_unit/control_unit_tb.vhd` | truth-table style: one assert block per instruction from the ISA table (R-type checked with 3 different `FunctionCode` values to prove pass-through rather than a hardcoded match), plus one unused/reserved opcode confirming a safe all-zero default |
+| `src/integration-tests/control_unit_datapath_integration_tb.vhd` | capstone integration test for the whole non-branching/non-jumping datapath: a real `ControlUnit` drives real `RegisterFile` + `Alu32` + `DataMemory` instances through decoded `add`/`load immediate`/`store`/`load` instructions. **The `load immediate` case is the one that matters most**: it first seeds the instruction's (ISA-unused) `rs` field's register with nonzero garbage (`0xBADBADBA`), then confirms the write-back result is still exactly the immediate — proving `AluOperandAZero` is actually necessary and correct, not just a theoretical concern. |
 | `src/pc_unit/pc_unit.vhd` | next-PC mux: sequential (+1) / branch (+signed imm, gated on Branch & zero-flag polarity) / jump (absolute) |
 | `src/pc_unit/pc_unit_tb.vhd` | sequential, taken/not-taken branch, jump |
 | `src/cpu/cpu.vhd` | top-level structural wiring of all of the above; ports = exactly `clk, ioaddress, iodata, ioenable` |
@@ -311,7 +312,18 @@ Container IDs change across rebuilds — look it up by the
       `make sim TB=RegisterFileAlu32DataMemoryIntegrationTb`, and `make sim
       TB=MetavalueStartupArtifactDemo_tb` all pass (the latter two print the
       documented benign warning; this is expected, not a regression).
-- [ ] **Step 6** — `control_unit.vhd` + `control_unit_tb.vhd`
+- [x] **Step 6** — `control_unit.vhd` + `control_unit_tb.vhd` (added
+      `AluOperandAZero` beyond the original signal sketch — see the
+      module-map entry above for why `load immediate` needs it) +
+      `control_unit_datapath_integration_tb.vhd` (capstone integration test
+      driving the real `RegisterFile`/`Alu32`/`DataMemory` trio from real
+      `ControlUnit` decode output across 4 instruction types; specifically
+      proves `AluOperandAZero` is necessary via a garbage-seeded `rs`
+      register — see module-map entry). Verified `make sim
+      TB=ControlUnit_tb` and `make sim
+      TB=ControlUnitDatapathIntegrationTb` both pass (the latter prints the
+      documented benign `@0ms` metavalue warning — expected, not a
+      regression).
 - [ ] **Step 7** — `pc_unit.vhd` + `pc_unit_tb.vhd`
 - [ ] **Step 8** — `cpu.vhd` + `cpu_tb.vhd` (directed instruction-class tests)
 - [ ] **Step 9** — `tools/assemble_sieve.py` + `sieve_program_pkg.vhd`
