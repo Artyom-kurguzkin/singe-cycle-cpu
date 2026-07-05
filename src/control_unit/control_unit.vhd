@@ -12,17 +12,29 @@ use IEEE.STD_LOGIC_1164.ALL;
 -- every one of these signals must be valid within the same cycle the
 -- instruction is fetched, with no clock delay.
 --
--- One design note beyond the ISA table itself: `load immediate` needs the
--- ALU to compute "zero OP immediate" so its result (the immediate itself)
--- can ride the normal ALU-result write-back path instead of needing a
--- brand new write-back data source. That requires forcing the ALU's first
--- operand to zero -- but this ISA's r0 is an ordinary read/write register,
--- not a hardwired zero constant (see
--- docs/cpu-implementation-plan.md section 2), so relying on "r0 happens to
--- hold zero" would be a fragile, program-specific assumption, not a real
--- hardware guarantee. AluOperandAZero exists specifically to make this
--- correct in general, independent of what any particular program does with
--- r0.
+-- Two design notes beyond the ISA table itself:
+--
+-- 1) `load immediate` needs the ALU to compute "zero OP immediate" so its
+--    result (the immediate itself) can ride the normal ALU-result
+--    write-back path instead of needing a brand new write-back data
+--    source. That requires forcing the ALU's first operand to zero -- but
+--    this ISA's r0 is an ordinary read/write register, not a hardwired
+--    zero constant (see docs/cpu-implementation-plan.md section 2), so
+--    relying on "r0 happens to hold zero" would be a fragile,
+--    program-specific assumption, not a real hardware guarantee.
+--    AluOperandAZero exists specifically to make this correct in general,
+--    independent of what any particular program does with r0.
+--
+-- 2) The instruction word's 16-bit immediate field means two genuinely
+--    different things depending on the opcode: `load immediate` per the
+--    ISA table zero-extends it ("immediate->$rt(15 downto 0)" -- see
+--    section 2's resolved-ambiguities note on why this must be a
+--    zero-extend, not sign-extend), while `load`/`store` address
+--    calculation follows the standard MIPS convention of sign-extending an
+--    offset that can legitimately be negative. Since both cases share the
+--    same AluSourceSelect = '1' path into the ALU, cpu.vhd needs to know
+--    *which* extension to apply -- that is exactly what
+--    ImmediateZeroExtend selects.
 entity ControlUnit is
     Port (
         -- The instruction's opcode field (bits 31 downto 26 of the 32-bit
@@ -47,6 +59,13 @@ entity ControlUnit is
         -- load, store); R-type instructions always use a register for both
         -- operands.
         AluSourceSelect           : out STD_LOGIC;
+
+        -- Only meaningful when AluSourceSelect = '1'. '1' means the 16-bit
+        -- immediate should be zero-extended to 32 bits before reaching the
+        -- ALU (load immediate); '0' means it should be sign-extended
+        -- (load/store address calculation). See this entity's header
+        -- comment, note 2, for why these need different extensions.
+        ImmediateZeroExtend       : out STD_LOGIC;
 
         -- '1' forces the ALU's first operand to all-zero instead of the
         -- register file's rs read data -- see this entity's header comment
@@ -120,6 +139,7 @@ begin
         -- don't-cares per the ISA table.
         RegisterDestinationSelect <= '0';
         AluSourceSelect           <= '0';
+        ImmediateZeroExtend       <= '0';
         AluOperandAZero           <= '0';
         MemoryToRegisterSelect    <= '0';
         RegisterWriteEnable       <= '0';
@@ -148,6 +168,7 @@ begin
             when "100010" =>
                 RegisterDestinationSelect <= '0'; -- destination is rt
                 AluSourceSelect           <= '1'; -- second operand is the immediate
+                ImmediateZeroExtend       <= '1'; -- zero-extend per the ISA table
                 AluOperandAZero           <= '1'; -- force first operand to zero
                 MemoryToRegisterSelect    <= '0'; -- write back the ALU result
                 RegisterWriteEnable       <= '1';

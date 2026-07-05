@@ -35,6 +35,7 @@ architecture Behavioral of PcUnitControlUnitAlu32IntegrationTb is
             FunctionCode              : in  STD_LOGIC_VECTOR (2 downto 0);
             RegisterDestinationSelect : out STD_LOGIC;
             AluSourceSelect           : out STD_LOGIC;
+            ImmediateZeroExtend       : out STD_LOGIC;
             AluOperandAZero           : out STD_LOGIC;
             MemoryToRegisterSelect    : out STD_LOGIC;
             RegisterWriteEnable       : out STD_LOGIC;
@@ -112,6 +113,7 @@ begin
             FunctionCode              => InstructionFunctionCode,
             RegisterDestinationSelect => open,
             AluSourceSelect           => open,
+            ImmediateZeroExtend       => open,
             AluOperandAZero           => open,
             MemoryToRegisterSelect    => open,
             RegisterWriteEnable       => open,

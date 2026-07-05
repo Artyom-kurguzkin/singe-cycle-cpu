@@ -31,6 +31,7 @@ architecture Behavioral of ControlUnitDatapathIntegrationTb is
             FunctionCode              : in  STD_LOGIC_VECTOR (2 downto 0);
             RegisterDestinationSelect : out STD_LOGIC;
             AluSourceSelect           : out STD_LOGIC;
+            ImmediateZeroExtend       : out STD_LOGIC;
             AluOperandAZero           : out STD_LOGIC;
             MemoryToRegisterSelect    : out STD_LOGIC;
             RegisterWriteEnable       : out STD_LOGIC;
@@ -139,6 +140,7 @@ begin
             FunctionCode              => InstructionFunctionCode,
             RegisterDestinationSelect => RegisterDestinationSelect,
             AluSourceSelect           => AluSourceSelect,
+            ImmediateZeroExtend       => open, -- this test drives ImmediateValue pre-extended already
             AluOperandAZero           => AluOperandAZero,
             MemoryToRegisterSelect    => MemoryToRegisterSelect,
             RegisterWriteEnable       => ControlRegisterWriteEnable,

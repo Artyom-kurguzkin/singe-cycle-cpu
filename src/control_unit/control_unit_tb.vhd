@@ -18,6 +18,7 @@ architecture Behavioral of ControlUnit_tb is
             FunctionCode              : in  STD_LOGIC_VECTOR (2 downto 0);
             RegisterDestinationSelect : out STD_LOGIC;
             AluSourceSelect           : out STD_LOGIC;
+            ImmediateZeroExtend       : out STD_LOGIC;
             AluOperandAZero           : out STD_LOGIC;
             MemoryToRegisterSelect    : out STD_LOGIC;
             RegisterWriteEnable       : out STD_LOGIC;
@@ -33,6 +34,7 @@ architecture Behavioral of ControlUnit_tb is
     signal FunctionCode              : STD_LOGIC_VECTOR (2 downto 0) := (others => '0');
     signal RegisterDestinationSelect : STD_LOGIC;
     signal AluSourceSelect           : STD_LOGIC;
+    signal ImmediateZeroExtend       : STD_LOGIC;
     signal AluOperandAZero           : STD_LOGIC;
     signal MemoryToRegisterSelect    : STD_LOGIC;
     signal RegisterWriteEnable       : STD_LOGIC;
@@ -50,6 +52,7 @@ begin
             FunctionCode              => FunctionCode,
             RegisterDestinationSelect => RegisterDestinationSelect,
             AluSourceSelect           => AluSourceSelect,
+            ImmediateZeroExtend       => ImmediateZeroExtend,
             AluOperandAZero           => AluOperandAZero,
             MemoryToRegisterSelect    => MemoryToRegisterSelect,
             RegisterWriteEnable       => RegisterWriteEnable,
@@ -92,10 +95,13 @@ begin
             report "R-TYPE lbs DECODE FAILED" severity failure;
 
         -- ---- load immediate (0x22) ----
+        -- The one case where ImmediateZeroExtend must be '1' -- everything
+        -- else in this ISA that uses the immediate wants it sign-extended.
         OpCode <= "100010"; FunctionCode <= "000"; -- funct is a don't-care for I-type
         wait for 10 ns;
         assert RegisterDestinationSelect = '0' and AluSourceSelect = '1'
-            and AluOperandAZero = '1' and MemoryToRegisterSelect = '0'
+            and ImmediateZeroExtend = '1' and AluOperandAZero = '1'
+            and MemoryToRegisterSelect = '0'
             and RegisterWriteEnable = '1' and MemoryWriteEnable = '0'
             and BranchEnable = '0' and JumpEnable = '0'
             and AluOpCode = "011"
@@ -105,7 +111,8 @@ begin
         OpCode <= "100011"; FunctionCode <= "000";
         wait for 10 ns;
         assert RegisterDestinationSelect = '0' and AluSourceSelect = '1'
-            and AluOperandAZero = '0' and MemoryToRegisterSelect = '1'
+            and ImmediateZeroExtend = '0' and AluOperandAZero = '0'
+            and MemoryToRegisterSelect = '1'
             and RegisterWriteEnable = '1' and MemoryWriteEnable = '0'
             and BranchEnable = '0' and JumpEnable = '0'
             and AluOpCode = "000"
@@ -114,7 +121,8 @@ begin
         -- ---- store (0x21) ----
         OpCode <= "100001"; FunctionCode <= "000";
         wait for 10 ns;
-        assert AluSourceSelect = '1' and AluOperandAZero = '0'
+        assert AluSourceSelect = '1' and ImmediateZeroExtend = '0'
+            and AluOperandAZero = '0'
             and RegisterWriteEnable = '0' and MemoryWriteEnable = '1'
             and BranchEnable = '0' and JumpEnable = '0'
             and AluOpCode = "000"
@@ -153,7 +161,8 @@ begin
         OpCode <= "111111"; FunctionCode <= "000";
         wait for 10 ns;
         assert RegisterDestinationSelect = '0' and AluSourceSelect = '0'
-            and AluOperandAZero = '0' and MemoryToRegisterSelect = '0'
+            and ImmediateZeroExtend = '0' and AluOperandAZero = '0'
+            and MemoryToRegisterSelect = '0'
             and RegisterWriteEnable = '0' and MemoryWriteEnable = '0'
             and BranchEnable = '0' and BranchOnZero = '0' and JumpEnable = '0'
             and AluOpCode = "000"

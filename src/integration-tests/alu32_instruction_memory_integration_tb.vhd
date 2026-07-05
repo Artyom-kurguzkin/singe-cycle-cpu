@@ -112,8 +112,15 @@ begin
     Stimulus: process
     begin
         -- ---- Address 0 (the starting address, before any clock edge) ----
+        -- Step 8 replaced instruction_memory.vhd's arbitrary
+        -- 0x11111111-style placeholder words with a real hand-assembled
+        -- test program for cpu_tb.vhd (see that file's comments) -- these
+        -- expected values were updated to match its first three
+        -- instructions, which is all this test needs (it's only checking
+        -- that sequential fetch-address advancement via a real Alu32 works,
+        -- not decoding what the instructions mean).
         wait for 1 ns; -- let the async ALU + instruction memory settle
-        assert FetchedInstruction = x"11111111"
+        assert FetchedInstruction = x"88000000" -- load immediate r0, 0
             report "FETCH AT ADDRESS 0 FAILED" severity failure;
 
         -- ---- Address 1, reached via one ALU-computed increment ----
@@ -121,7 +128,7 @@ begin
         wait for 1 ns;
         assert unsigned(CurrentAddress) = 1
             report "ALU DID NOT ADVANCE ADDRESS TO 1" severity failure;
-        assert FetchedInstruction = x"22222222"
+        assert FetchedInstruction = x"88040028" -- load immediate r1, 10
             report "FETCH AT ADDRESS 1 FAILED" severity failure;
 
         -- ---- Address 2, reached via a second ALU-computed increment ----
@@ -129,7 +136,7 @@ begin
         wait for 1 ns;
         assert unsigned(CurrentAddress) = 2
             report "ALU DID NOT ADVANCE ADDRESS TO 2" severity failure;
-        assert FetchedInstruction = x"33333333"
+        assert FetchedInstruction = x"88080050" -- load immediate r2, 20
             report "FETCH AT ADDRESS 2 FAILED" severity failure;
 
         report "All tests passed." severity note;
