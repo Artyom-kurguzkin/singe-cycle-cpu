@@ -29,8 +29,18 @@ entity RegisterFile is
         -- The two registers' current values, exposed combinationally (see
         -- below) so the rest of the datapath can use them within the same
         -- cycle without waiting for a clock edge.
-        ReadData1            : out STD_LOGIC_VECTOR (31 downto 0);
-        ReadData2            : out STD_LOGIC_VECTOR (31 downto 0);
+        -- Defaulted to zero (rather than left undriven) purely so that at
+        -- simulation time 0, before the concurrent assignments below have
+        -- evaluated even once, these ports already reflect a defined value
+        -- instead of 'U' -- otherwise a deep enough chain of structural
+        -- modules reading these at that very first instant (e.g. an ALU
+        -- consuming them, then a memory doing to_integer(unsigned(...)) on
+        -- something derived from the ALU's result) could transiently print
+        -- a GHDL metavalue warning before everything settles moments
+        -- later. Matches the same t=0-initializer approach used for
+        -- Registers itself.
+        ReadData1            : out STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
+        ReadData2            : out STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
 
         -- Selects which register gets written this cycle -- typically the
         -- instruction's rd field (R-type) or rt field (load/load-immediate).

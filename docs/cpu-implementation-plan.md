@@ -142,7 +142,7 @@ memory ops (load/store address calc), force ALU op to add (000).
 Each module gets its own folder under `src/`, containing that module's
 implementation + its own testbench (e.g. `src/alu/alu32.vhd` +
 `src/alu/alu32_tb.vhd`). Cross-module integration testbenches that don't
-belong to any single module live in `src/integration/` instead. The
+belong to any single module live in `src/integration-tests/` instead. The
 Makefile's recursive `find` already picks up any nesting depth, so this
 needed no build-system change beyond the pre-existing `src/example/`
 exclusion. `src/example/` itself is untouched, unused, excluded from the
@@ -156,12 +156,14 @@ build (see Scope decisions).
 | `src/alu/alu32_tb.vhd` | directed per-funct-code tests, `alu_bit_slice_tb.vhd` style |
 | `src/register_file/register_file.vhd` | 16×32-bit, dual async read port, single sync (clocked) write port |
 | `src/register_file/register_file_tb.vhd` | write/read-back on both ports, simultaneous dual-read check (same reg on both ports, and two different regs at once) |
-| `src/integration/register_file_alu32_integration_tb.vhd` | cross-module integration test: wires a real `RegisterFile` + `Alu32` together (no mocks) and drives a short hand-written "instruction" sequence (seed two registers, `add`, then a chained `sub` off the `add`'s result) end-to-end, proving the two already-built modules actually cooperate correctly before they get buried inside `cpu.vhd`. **Pattern going forward:** add a small integration testbench like this one whenever a new module can be meaningfully wired to an already-completed one, rather than deferring all cross-module testing to `cpu_tb.vhd`/`cpu_sieve_tb.vhd` at the very end — bugs at the seams are much cheaper to find here. |
+| `src/integration-tests/register_file_alu32_integration_tb.vhd` | cross-module integration test: wires a real `RegisterFile` + `Alu32` together (no mocks) and drives a short hand-written "instruction" sequence (seed two registers, `add`, then a chained `sub` off the `add`'s result) end-to-end, proving the two already-built modules actually cooperate correctly before they get buried inside `cpu.vhd`. **Pattern going forward:** add a small integration testbench like this one whenever a new module can be meaningfully wired to an already-completed one, rather than deferring all cross-module testing to `cpu_tb.vhd`/`cpu_sieve_tb.vhd` at the very end — bugs at the seams are much cheaper to find here. |
 | `src/instruction_memory/instruction_memory.vhd` | 1024×32 async-read ROM. Contents are a **local placeholder constant** for now (a handful of distinct words at known addresses + `nop` everywhere else), not `sieve_program_pkg` — introducing the real package early would force solving VHDL package-analysis-order in the Makefile (packages must be analyzed before anything that `use`s them, unlike component-instantiated entities such as `ALUBitSlice`, which only bind at elaboration) twice for no benefit. Step 9 introduces `sieve_program_pkg.vhd` for real and switches this file over to it, fixing the ordering properly at that point. |
 | `src/instruction_memory/instruction_memory_tb.vhd` | spot-check a few addresses (incl. the top of the range, 1023) against the placeholder constant, plus one unlisted address to confirm the `nop` default applies |
-| `src/integration/alu32_instruction_memory_integration_tb.vhd` | cross-module integration test previewing the PC-unit/instruction-fetch interaction ahead of Step 7: a plain signal stands in for the not-yet-built PC register, advanced each clock edge by feeding it through the real `Alu32` in `inc` mode, with the result driving the real `InstructionMemory`'s `Address` — checks addresses 0/1/2 fetch in order with the right placeholder words. (Caught a real bug via `ghdl`'s bound-check: a hand-written 22-zero-bit zero-extend literal for the ALU operand was miscounted at 21 bits; fixed with `resize(unsigned(...), 32)` instead, which can't be miscounted since both widths involved are compile-time constants, not runtime-variable sizing.) |
-| `src/data_memory/data_memory.vhd` | 128×32 RAM + addr-range decode driving `ioaddress`/`iodata`/`ioenable` |
-| `src/data_memory/data_memory_tb.vhd` | RAM read/write in range; IO-range store doesn't touch RAM, correctly pulses IO signals |
+| `src/integration-tests/alu32_instruction_memory_integration_tb.vhd` | cross-module integration test previewing the PC-unit/instruction-fetch interaction ahead of Step 7: a plain signal stands in for the not-yet-built PC register, advanced each clock edge by feeding it through the real `Alu32` in `inc` mode, with the result driving the real `InstructionMemory`'s `Address` — checks addresses 0/1/2 fetch in order with the right placeholder words. (Caught a real bug via `ghdl`'s bound-check: a hand-written 22-zero-bit zero-extend literal for the ALU operand was miscounted at 21 bits; fixed with `resize(unsigned(...), 32)` instead, which can't be miscounted since both widths involved are compile-time constants, not runtime-variable sizing.) |
+| `src/data_memory/data_memory.vhd` | 128×32 RAM + addr-range decode driving `ioaddress`/`iodata`/`ioenable`. Named `data_memory.vhd`/`DataMemory`, not `data_mem` — matches the `instruction_memory`/`register_file` full-name precedent. `IoAddress`/`IoData`/`IoEnable` are purely combinational (not registered): `IoEnable <= '1' when (MemoryWriteEnable = '1' and IsIoAddress = '1') else '0'`, gated by `IsIoAddress <= Address(7)`. The RAM write process additionally requires `IsIoAddress = '0'` before writing — this is the guard that stops an IO-range store from also corrupting RAM at the aliased low-7-bits index (e.g. storing to address 200 must not silently write RAM(72)). |
+| `src/data_memory/data_memory_tb.vhd` | RAM read/write in range (ignored without `MemoryWriteEnable`, captured with it); ordinary RAM store doesn't raise `IoEnable`; IO-range store raises `IoEnable`/`IoAddress`/`IoData` correctly *and* is confirmed not to have written through to RAM at the aliased index |
+| `src/integration-tests/register_file_alu32_data_memory_integration_tb.vhd` | cross-module integration test chaining all three completed modules for real `store`/`load`-shaped sequences: `RegisterFile` (rs/rt) → `Alu32` (address = rs + immediate, `OpCode` forced to add, matching the real control unit's future behaviour for memory ops) → `DataMemory` (RAM store, then a `load` reading it back, then a round trip through the register file's own write port) → a final IO-range store (address 130) checked both for the right `IoEnable` pulse and for not corrupting RAM at the aliased index (2). |
+| `src/simulation-notes/metavalue_startup_artifact_demo_tb.vhd` | **Not a module test** — a minimal, deliberately isolated reproduction of a GHDL simulation-startup artifact found while writing the integration test above: any memory address fed through even one concurrent signal assignment (instead of being a directly-driven signal) prints `NUMERIC_STD.TO_INTEGER: metavalue detected` at `@0ms`, *even when every signal involved has an explicit `'0'` initial value* — confirmed by bisection to be an inherent one-delta-cycle artifact of VHDL/GHDL elaboration (a driven signal's first computed value isn't available until its driver executes at least once), not a bug in `RegisterFile`/`DataMemory`/`Alu32`. Scoped to `@0ms` only and self-resolves within the same simulation instant; every testbench in this project already only checks results after a nonzero `wait for ...`, so it never contaminates a real assertion. This file demonstrates that explicitly (asserts a correct read-back at `@11ns` despite the `@0ms` warning) so nobody re-investigates it from scratch or mistakes it for a real bug later. **If this warning appears in any future testbench's output, it does not need investigating** — link back to this file instead. |
 | `src/control_unit/control_unit.vhd` | opcode/funct → {RegDst, ALUSrc, MemToReg, RegWrite, MemWrite, Branch, Jump, ALUOp} |
 | `src/control_unit/control_unit_tb.vhd` | truth-table style: one assert block per opcode |
 | `src/pc_unit/pc_unit.vhd` | next-PC mux: sequential (+1) / branch (+signed imm, gated on Branch & zero-flag polarity) / jump (absolute) |
@@ -282,7 +284,7 @@ Container IDs change across rebuilds — look it up by the
       TB=Alu32InstructionMemoryIntegrationTb` both pass.
 - **Reorg (after Step 4)** — moved every module into its own folder under
   `src/` (e.g. `src/alu/alu32.vhd` + `src/alu/alu32_tb.vhd`), with
-  cross-module integration testbenches collected under `src/integration/`
+  cross-module integration testbenches collected under `src/integration-tests/`
   instead of living next to any one module. No Makefile changes were needed
   — `VHDL_FILES`'s recursive `find` already handles arbitrary nesting, and
   component-based instantiation (used everywhere so far) doesn't care about
@@ -290,9 +292,25 @@ Container IDs change across rebuilds — look it up by the
   testbenches still pass after the move. This folder-per-module layout is
   now the convention for every remaining step below — the module-map paths
   above already reflect it.
-- [ ] **Step 5** — `data_memory.vhd` + `data_memory_tb.vhd` (renamed from
+- [x] **Step 5** — `data_memory.vhd` + `data_memory_tb.vhd` (renamed from
       the original `data_mem`/`instr_mem` shorthand to match the
       `instruction_memory`/`register_file` full-name precedent already set)
+      + `register_file_alu32_data_memory_integration_tb.vhd` (the three-way
+      integration test — see module-map entry for what it drives). Also
+      produced `src/simulation-notes/metavalue_startup_artifact_demo_tb.vhd`,
+      a deliberate, non-module demo documenting a benign GHDL `@0ms`
+      startup warning discovered while writing the integration test (see
+      its own module-map entry — **read that before spending time on this
+      warning again if it resurfaces in a later step**). Also added
+      explicit `'0'` initial values to `Alu32`'s internal `CarryChain`/
+      `ResultInternal` and `RegisterFile`'s `ReadData1`/`ReadData2` output
+      ports — good practice regardless (matches the defined-startup-state
+      convention already used for `Registers`/`Ram`), though bisection
+      showed the `@0ms` warning is not actually caused by any missing
+      initializer (see the demo file). Verified `make sim TB=DataMemory_tb`,
+      `make sim TB=RegisterFileAlu32DataMemoryIntegrationTb`, and `make sim
+      TB=MetavalueStartupArtifactDemo_tb` all pass (the latter two print the
+      documented benign warning; this is expected, not a regression).
 - [ ] **Step 6** — `control_unit.vhd` + `control_unit_tb.vhd`
 - [ ] **Step 7** — `pc_unit.vhd` + `pc_unit_tb.vhd`
 - [ ] **Step 8** — `cpu.vhd` + `cpu_tb.vhd` (directed instruction-class tests)

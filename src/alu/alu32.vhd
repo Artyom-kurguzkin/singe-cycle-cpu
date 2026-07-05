@@ -63,14 +63,25 @@ architecture Structural of Alu32 is
     -- exposed -- see ZeroFlag's comment above) but has to exist as a signal
     -- since bit 31's ALUBitSlice instance still needs somewhere to drive
     -- its CarryOut port.
-    signal CarryChain          : STD_LOGIC_VECTOR (32 downto 0);
+    -- Initialised to all zeros (rather than left undriven) so that at
+    -- simulation time 0, before the generate loop's ALUBitSlice instances
+    -- have evaluated even once, this signal already holds a defined value
+    -- instead of 'U' -- otherwise anything reading Alu32's Result at that
+    -- first instant (e.g. DataMemory's to_integer(unsigned(...)) on an
+    -- address derived from it) would see undefined bits and print a
+    -- GHDL metavalue warning, even though the real computed result settles
+    -- correctly moments later. Matches the same t=0-initializer approach
+    -- already used for RegisterFile's Registers and DataMemory's Ram.
+    signal CarryChain          : STD_LOGIC_VECTOR (32 downto 0) := (others => '0');
 
     -- Holds the 32 Output bits coming back from the bit slices before they
     -- are both exposed on the Result port and fed into the ZeroFlag
     -- comparison below. (A signal is needed here, rather than reading back
     -- the Result output port directly, because VHDL doesn't allow reading
     -- the value of an "out" port from within the same entity.)
-    signal ResultInternal      : STD_LOGIC_VECTOR (31 downto 0);
+    -- Same reasoning as CarryChain's initializer above: defined from time 0
+    -- rather than starting as 'U'.
+    signal ResultInternal      : STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
 
     -- A single ALUBitSlice cannot shift itself (its "110" case only passes
     -- InputA straight through -- see alu_bit_slice.vhd), so a real
