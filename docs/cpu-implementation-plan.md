@@ -137,6 +137,88 @@ memory ops (load/store address calc), force ALU op to add (000).
   8 bits (covers 0-255, values 128-255 meaningful when `ioenable='1'`),
   `iodata` is 32 bits (matches the datapath width throughout).
 
+## 2b. Program-loading mechanism (how a compiled program gets into
+InstructionMemory — settled at Step 8, after several false starts; record
+the final design here so nobody re-derives it, or re-tries an already-ruled-out
+alternative, later)
+
+**Final design:**
+- `InstructionMemory` (`instruction_memory.vhd`) takes its contents via a
+  **generic**, `ProgramData : STD_LOGIC_VECTOR(32767 downto 0)` (1024 words
+  × 32 bits, flattened into one wide bus — word `W` at bits
+  `((W+1)*32-1) downto (W*32)`), with **no default value**. It has zero
+  knowledge of files. `cpu.vhd` has the same generic, forwarded straight
+  through to its internal `InstructionMemory` instance.
+- `tools/assemble_sieve.py` (the assembler) outputs **plain machine code
+  only** — never VHDL. Two output files: a human-readable binary listing
+  (`--binary-out`, fields space-separated with the source line as a
+  comment) and the actual compiled binary (`--bits-out`, one instruction
+  per line, each line exactly 32 characters of `0`/`1`, nothing else).
+- `program_loader_pkg.vhd` provides one function,
+  `LoadProgramFromFile(FilePath : string) return STD_LOGIC_VECTOR`, that
+  reads a `--bits-out` file into the flattened 32768-bit form. **This
+  package, and the file-reading it does, is used exclusively by
+  testbenches** (`cpu_tb.vhd`, `instruction_memory_tb.vhd`,
+  `alu32_instruction_memory_integration_tb.vhd`) — never by `cpu.vhd` or
+  `instruction_memory.vhd`. A testbench calls it once, at elaboration, to
+  build a `constant`, then passes that constant in via the `ProgramData`
+  generic when instantiating `Cpu`/`InstructionMemory`.
+
+**Why this shape, specifically (each point below is something an earlier
+attempt got wrong, keep it that way going forward):**
+- **Not a hardcoded constant inside `instruction_memory.vhd`.** That was
+  Step 4/8's original approach and meant hand-editing that file's source
+  every time the program changed (test program now, the real Appendix 3
+  sieve program at Step 9) — exactly the problem this mechanism exists to
+  avoid.
+- **Not read from a file *inside* `instruction_memory.vhd` or `cpu.vhd`.**
+  `STD.TEXTIO` file I/O is inherently non-synthesizable (there is no
+  real-silicon equivalent) — it has no business being part of a hardware
+  description, not even as an "internal implementation detail" component
+  wired invisibly inside `cpu.vhd`. A real ROM's contents are fixed at
+  fabrication; a `generic` (resolved once at elaboration, never a live
+  signal) is the hardware-honest way to model that, and it keeps every
+  file reachable from `cpu.vhd`'s own structural body 100% synthesizable
+  in spirit.
+- **Not a compiled VHDL package per program**, e.g. a
+  `sieve_program_pkg.vhd` holding `constant SievProgram : ... := (x"...",
+  ...)`. A compiler/assembler should emit *machine code*, not another
+  language's source code — and generating a `.vhd` file per program also
+  reopens the VHDL package-analysis-ordering problem (packages must be
+  analyzed before anything that `use`s them) for no benefit, since the
+  binary-file approach sidesteps it entirely except for the one small
+  loader package itself.
+- **Not a custom array type** (e.g. `type InstructionArrayType is array (0
+  to 1023) of STD_LOGIC_VECTOR(31 downto 0)`) **shared via its own
+  package.** A custom type used across separately-compiled files still
+  needs a package purely so every file agrees on the same type — flattening
+  to a plain `STD_LOGIC_VECTOR` sidesteps that entirely, since
+  `STD_LOGIC_VECTOR` is already predefined and visible everywhere. This is
+  also why `program_loader_pkg.vhd` is the *only* package in this whole
+  project: nothing else needs one.
+- **The loader is a plain function, not an entity/component.** An entity
+  version (`ProgramLoader`, instantiated inside `cpu.vhd`, driving
+  `ProgramData` as an output port to `InstructionMemory`'s input port) was
+  actually built and worked, but was still fake, non-synthesizable
+  "hardware" sitting inside `cpu.vhd`'s structural body, wired via a
+  runtime signal — which is exactly what the generic-based approach above
+  avoids. A function, callable only from testbenches, has no such
+  presence in the hardware description at all.
+- **The function still needs to live in a package** (not be declared
+  locally inside one testbench), purely because three separate testbenches
+  need to call it and VHDL has no way to share a subprogram across files
+  except via a package — this is not the same concern as the "custom
+  array type" package problem above, and doesn't justify one.
+
+**Consequence for Step 9/10:** the real sieve program never needs its own
+VHDL package at all now — `tools/assemble_sieve.py` just gets pointed at
+Appendix 3's `.asm` transcription to produce
+`tools/programs/sieve_program.bin`, and `cpu_sieve_tb.vhd` loads it via the
+exact same `ProgramLoaderPkg.LoadProgramFromFile` call `cpu_tb.vhd` already
+uses, just with a different file path. The module map's earlier mention of
+a `sieve_program_pkg.vhd` file is obsolete; ignore it if it still appears
+anywhere stale.
+
 ## 3. Module map
 
 Each module gets its own folder under `src/`, containing that module's
@@ -157,11 +239,11 @@ build (see Scope decisions).
 | `src/register_file/register_file.vhd` | 16×32-bit, dual async read port, single sync (clocked) write port |
 | `src/register_file/register_file_tb.vhd` | write/read-back on both ports, simultaneous dual-read check (same reg on both ports, and two different regs at once) |
 | `src/integration-tests/register_file_alu32_integration_tb.vhd` | cross-module integration test: wires a real `RegisterFile` + `Alu32` together (no mocks) and drives a short hand-written "instruction" sequence (seed two registers, `add`, then a chained `sub` off the `add`'s result) end-to-end, proving the two already-built modules actually cooperate correctly before they get buried inside `cpu.vhd`. **Pattern going forward:** add a small integration testbench like this one whenever a new module can be meaningfully wired to an already-completed one, rather than deferring all cross-module testing to `cpu_tb.vhd`/`cpu_sieve_tb.vhd` at the very end — bugs at the seams are much cheaper to find here. |
-| `src/instruction_memory/instruction_memory.vhd` | 1024×32 async-read ROM. Contents are a real, deliberately assembled **test program** (not `sieve_program_pkg`) — introducing the real package early would force solving VHDL package-analysis-order in the Makefile (packages must be analyzed before anything that `use`s them, unlike component-instantiated entities such as `ALUBitSlice`, which only bind at elaboration) twice for no benefit. Step 9 introduces `sieve_program_pkg.vhd` for real and switches this file over to it, fixing the ordering properly at that point. At Step 4 this was 4 arbitrary placeholder words; at Step 8 it became a real 32-instruction program assembled by `tools/assemble_sieve.py` from `tools/programs/cpu_test_program.asm` (source/outputs described below) — the pasted-in constant is that generated file's contents verbatim, not hand-transcribed. |
-| `src/instruction_memory/instruction_memory_tb.vhd` | spot-check a few addresses (incl. the top of the range, 1023, and the program's last instruction) against the assembled program, plus one unlisted address to confirm the `nop` default applies |
-| `tools/programs/cpu_test_program.asm` | hand-written assembly source for `instruction_memory.vhd`'s test program, in Appendix-3-compatible syntax (labels, `--` comments) — exercises R-type add/sub, load-immediate, a store/load round trip, a taken `beq`, a taken `bne`, a not-taken `bne`, and an absolute `jump`, then stores 10 registers out to IO addresses 128-137 so `cpu_tb.vhd` can verify the whole run purely through `cpu.vhd`'s external ports (see `cpu_tb.vhd`'s entry below for why), ending in a self-jump steady-state loop like Appendix 3's `#label4`. **Caught a real bug**: `store`'s documented operand order is `(addr, data, imm)` — opposite of `load`'s `(dest, addr, imm)` (section 2's asymmetry) — and the first draft of this file wrote every `store` line with the *data* register first, matching `load`'s order instead of `store`'s. The assembler encoded exactly what was written (correctly) with the operands swapped; the mistake was caught by eye when the resulting hex didn't match independently hand-computed values, not by any tool. |
-| `tools/programs/cpu_test_program.listing.txt`, `tools/programs/cpu_test_program.instructions.vhd` | generated outputs of `tools/assemble_sieve.py` run against the `.asm` file above — the human-readable binary listing and the ready-to-paste VHDL constant array (pasted directly into `instruction_memory.vhd`), respectively. Regenerate with: `python3 tools/assemble_sieve.py tools/programs/cpu_test_program.asm --binary-out tools/programs/cpu_test_program.listing.txt --vhdl-out tools/programs/cpu_test_program.instructions.vhd` |
-| `src/integration-tests/alu32_instruction_memory_integration_tb.vhd` | cross-module integration test previewing the PC-unit/instruction-fetch interaction ahead of Step 7: a plain signal stands in for the not-yet-built PC register, advanced each clock edge by feeding it through the real `Alu32` in `inc` mode, with the result driving the real `InstructionMemory`'s `Address` — checks addresses 0/1/2 fetch in order with the right placeholder words. (Caught a real bug via `ghdl`'s bound-check: a hand-written 22-zero-bit zero-extend literal for the ALU operand was miscounted at 21 bits; fixed with `resize(unsigned(...), 32)` instead, which can't be miscounted since both widths involved are compile-time constants, not runtime-variable sizing.) |
+| `src/instruction_memory/instruction_memory.vhd` | 1024×32 async-read ROM. Takes its contents via the `ProgramData` generic (see section 2b) — no hardcoded program, no file access, no default value. At Step 4 this was 4 arbitrary placeholder words hardcoded in the body; at Step 8 it became this generic-based design once a real, swappable test program was needed. |
+| `src/instruction_memory/instruction_memory_tb.vhd` | plays the "loader" itself (`ProgramLoaderPkg.LoadProgramFromFile`, see section 2b) to build a `constant` from `tools/programs/cpu_test_program.bin`, passes it via generic map, then spot-checks a few addresses (incl. the top of the range, 1023, and the program's last instruction) against the assembled program, plus one unlisted address to confirm the loader's `nop` fill applies |
+| `tools/programs/cpu_test_program.asm` | hand-written assembly source for the test program, in Appendix-3-compatible syntax (labels, `--` comments) — exercises R-type add/sub, load-immediate, a store/load round trip, a taken `beq`, a taken `bne`, a not-taken `bne`, and an absolute `jump`, then stores 10 registers out to IO addresses 128-137 so `cpu_tb.vhd` can verify the whole run purely through `cpu.vhd`'s external ports (see `cpu_tb.vhd`'s entry below for why), ending in a self-jump steady-state loop like Appendix 3's `#label4`. **Caught a real bug**: `store`'s documented operand order is `(addr, data, imm)` — opposite of `load`'s `(dest, addr, imm)` (section 2's asymmetry) — and the first draft of this file wrote every `store` line with the *data* register first, matching `load`'s order instead of `store`'s. The assembler encoded exactly what was written (correctly) with the operands swapped; the mistake was caught by eye when the resulting hex didn't match independently hand-computed values, not by any tool. |
+| `tools/programs/cpu_test_program.listing.txt`, `tools/programs/cpu_test_program.bin` | generated outputs of `tools/assemble_sieve.py` run against the `.asm` file above — the human-readable binary listing and the actual compiled machine code (loaded by `ProgramLoaderPkg.LoadProgramFromFile`), respectively. Regenerate with: `python3 tools/assemble_sieve.py tools/programs/cpu_test_program.asm --binary-out tools/programs/cpu_test_program.listing.txt --bits-out tools/programs/cpu_test_program.bin` |
+| `src/integration-tests/alu32_instruction_memory_integration_tb.vhd` | cross-module integration test previewing the PC-unit/instruction-fetch interaction ahead of Step 7: a plain signal stands in for the not-yet-built PC register, advanced each clock edge by feeding it through the real `Alu32` in `inc` mode, with the result driving the real `InstructionMemory`'s `Address` — checks addresses 0/1/2 fetch in order with the right words (also plays the "loader" role itself, same as `instruction_memory_tb.vhd` above). (Caught a real bug via `ghdl`'s bound-check: a hand-written 22-zero-bit zero-extend literal for the ALU operand was miscounted at 21 bits; fixed with `resize(unsigned(...), 32)` instead, which can't be miscounted since both widths involved are compile-time constants, not runtime-variable sizing.) |
 | `src/data_memory/data_memory.vhd` | 128×32 RAM + addr-range decode driving `ioaddress`/`iodata`/`ioenable`. Named `data_memory.vhd`/`DataMemory`, not `data_mem` — matches the `instruction_memory`/`register_file` full-name precedent. `IoAddress`/`IoData`/`IoEnable` are purely combinational (not registered): `IoEnable <= '1' when (MemoryWriteEnable = '1' and IsIoAddress = '1') else '0'`, gated by `IsIoAddress <= Address(7)`. The RAM write process additionally requires `IsIoAddress = '0'` before writing — this is the guard that stops an IO-range store from also corrupting RAM at the aliased low-7-bits index (e.g. storing to address 200 must not silently write RAM(72)). |
 | `src/data_memory/data_memory_tb.vhd` | RAM read/write in range (ignored without `MemoryWriteEnable`, captured with it); ordinary RAM store doesn't raise `IoEnable`; IO-range store raises `IoEnable`/`IoAddress`/`IoData` correctly *and* is confirmed not to have written through to RAM at the aliased index |
 | `src/integration-tests/register_file_alu32_data_memory_integration_tb.vhd` | cross-module integration test chaining all three completed modules for real `store`/`load`-shaped sequences: `RegisterFile` (rs/rt) → `Alu32` (address = rs + immediate, `OpCode` forced to add, matching the real control unit's future behaviour for memory ops) → `DataMemory` (RAM store, then a `load` reading it back, then a round trip through the register file's own write port) → a final IO-range store (address 130) checked both for the right `IoEnable` pulse and for not corrupting RAM at the aliased index (2). |
@@ -172,11 +254,11 @@ build (see Scope decisions).
 | `src/pc_unit/pc_unit.vhd` | next-PC mux: sequential (+1) / branch (+signed imm, gated on `BranchEnable` & `ZeroFlag`/`BranchOnZero` polarity, via `BranchTaken <= BranchEnable and (ZeroFlag xnor BranchOnZero)` — plain `"="` on two `STD_LOGIC` values returns a `BOOLEAN`, which can't `and` with a `STD_LOGIC`, hence `xnor` instead) / jump (absolute, highest priority). **Contains no PC register itself** — purely combinational "what should the PC become next" logic; the actual clocked PC register lives in `cpu.vhd` (Step 8), the same separation `Alu32` has from any register that might store its result. |
 | `src/pc_unit/pc_unit_tb.vhd` | sequential (incl. wraparound at PC=1023), taken/not-taken branch in both directions (forward and backward/loop), jump overriding an otherwise-satisfied branch condition |
 | `src/integration-tests/pc_unit_control_unit_alu32_integration_tb.vhd` | cross-module integration test with a real `ControlUnit` + `Alu32` driving a real `PcUnit`, plus a clocked stand-in PC register (same "stand-in register, real logic" approach as Step 4's fetch-address preview) — drives a tiny hand-crafted `bne`/`bne`/`jump`/`add` sequence (loop taken, loop exited, then an unconditional jump, then an ordinary instruction) proving all three modules cooperate on real ALU-computed `ZeroFlag` values, not just directly-driven test signals like `pc_unit_tb.vhd` uses. |
-| `src/cpu/cpu.vhd` | top-level structural wiring of all of the above; ports = exactly `clk, ioaddress, iodata, ioenable`. Owns the two things no single module owns: the actual clocked `ProgramCounter` register (`PcUnit` only computes what it should become next — see that file's header comment) and the instruction-field extraction/sign-extension logic (`OpCode`/`RsField`/`RtField`/`RdField`/`FunctionCode`/`RawImmediate`/`JumpAddressField`, all sliced directly from `FetchedInstruction` per section 1's format tables — `SignExtendedImmediate`/`ZeroExtendedImmediate` computed via `resize(signed/unsigned(RawImmediate), 32)`, muxed by `ImmediateZeroExtend`). |
-| `src/cpu/cpu_tb.vhd` | runs `instruction_memory.vhd`'s full test program on a real `Cpu` instance and verifies the outcome **purely by observing the external `ioaddress`/`iodata`/`ioenable` ports** — no internal signal access, no debug ports, matching the spec's actual mechanism for reporting results. Samples `IoEnable` once per clock cycle, 1 ns after each rising edge — **not** with `wait until IoEnable = '1'` (see the note on the `IoEnable` glitch below). |
-| `tools/assemble_sieve.py` | two-pass assembler (labels resolved in pass 1, encoding in pass 2), built at **Step 8** (moved forward from its originally-planned Step 9 slot) once `cpu_tb.vhd` needed a real, nontrivial, branch/jump-heavy test program and hand-computing offsets by hand became error-prone. Encodes each mnemonic by its documented semantic role (section 2's `load`-vs-`store` operand-order asymmetry, `R`-type's uniform `rs rt rd` per Appendix 3's own convention even for `not`/`lbs`/`inc`), not with one generic parser. Reads a `.asm` source file (comments `--`, labels `#name`) and emits **two output files**: a human-readable binary listing (fields space-separated, source line as a trailing comment) and a ready-to-paste VHDL constant array — the latter is the actual machine-consumable form this project's instruction memories embed. Validates branch offsets fit the 10-bit signed field and jump/immediate values fit their encoding width, erroring out clearly instead of silently truncating. Will be reused as-is for Appendix 3's real sieve program at Step 9 (just a different `.asm` input). |
-| `src/cpu/sieve_program_pkg.vhd` | constant array of 32-bit machine words = Appendix 3's program, generated by `tools/assemble_sieve.py` (Step 9) |
-| `src/cpu/cpu_sieve_tb.vhd` | full integration test: run the real sieve program, capture every `(ioaddress, iodata)` while `ioenable='1'`, assert the captured sequence equals the golden prime list (Step 10) — same cycle-sampling approach as `cpu_tb.vhd`, for the same `IoEnable`-glitch reason |
+| `src/instruction_memory/program_loader_pkg.vhd` | the loading mechanism (section 2b): one function, `LoadProgramFromFile(FilePath : string) return STD_LOGIC_VECTOR`, reading a `--bits-out` machine-code file into the flattened 32768-bit form. **Testbench-only** — `cpu.vhd`/`instruction_memory.vhd` never reference this package. The only package in the whole project, needed purely because three different testbenches share this one function. |
+| `src/cpu/cpu.vhd` | top-level structural wiring of all of the above; ports = exactly `clk, ioaddress, iodata, ioenable`, plus a `ProgramData` generic (elaboration-time only, not a port, so it doesn't violate the spec's port list) forwarded straight into the internal `InstructionMemory` instance's own generic. Owns the two things no single module owns: the actual clocked `ProgramCounter` register (`PcUnit` only computes what it should become next — see that file's header comment) and the instruction-field extraction/sign-extension logic (`OpCode`/`RsField`/`RtField`/`RdField`/`FunctionCode`/`RawImmediate`/`JumpAddressField`, all sliced directly from `FetchedInstruction` per section 1's format tables — `SignExtendedImmediate`/`ZeroExtendedImmediate` computed via `resize(signed/unsigned(RawImmediate), 32)`, muxed by `ImmediateZeroExtend`). |
+| `src/cpu/cpu_tb.vhd` | the "loader": calls `ProgramLoaderPkg.LoadProgramFromFile("tools/programs/cpu_test_program.bin")` itself to build a `constant`, passes it via `Cpu`'s `ProgramData` generic map, then runs the full test program and verifies the outcome **purely by observing the external `ioaddress`/`iodata`/`ioenable` ports** — no internal signal access, no debug ports, matching the spec's actual mechanism for reporting results. Samples `IoEnable` once per clock cycle, 1 ns after each rising edge — **not** with `wait until IoEnable = '1'` (see the note on the `IoEnable` glitch below). |
+| `tools/assemble_sieve.py` | two-pass assembler (labels resolved in pass 1, encoding in pass 2), built at **Step 8** (moved forward from its originally-planned Step 9 slot) once `cpu_tb.vhd` needed a real, nontrivial, branch/jump-heavy test program and hand-computing offsets by hand became error-prone. Encodes each mnemonic by its documented semantic role (section 2's `load`-vs-`store` operand-order asymmetry, `R`-type's uniform `rs rt rd` per Appendix 3's own convention even for `not`/`lbs`/`inc`), not with one generic parser. Reads a `.asm` source file (comments `--`, labels `#name`) and emits **two plain-machine-code output files, never VHDL** (see section 2b for why): `--binary-out` (human-readable, fields space-separated, source line as a trailing comment) and `--bits-out` (the actual compiled binary — one instruction per line, each line exactly 32 characters of `0`/`1`). Validates branch offsets fit the 10-bit signed field and jump/immediate values fit their encoding width, erroring out clearly instead of silently truncating. Will be reused as-is for Appendix 3's real sieve program at Step 9 (just a different `.asm` input, producing `tools/programs/sieve_program.bin`). |
+| `src/cpu/cpu_sieve_tb.vhd` | full integration test (Step 10): loads `tools/programs/sieve_program.bin` via the same `ProgramLoaderPkg.LoadProgramFromFile` call `cpu_tb.vhd` uses, runs the real sieve program, captures every `(ioaddress, iodata)` while `ioenable='1'`, asserts the captured sequence equals the golden prime list — same cycle-sampling approach as `cpu_tb.vhd`, for the same `IoEnable`-glitch reason. No VHDL package for the sieve program is needed (section 2b). |
 
 ## 4. Testbench conventions (established, follow for every new testbench)
 
@@ -367,13 +449,29 @@ Container IDs change across rebuilds — look it up by the
       `tools/programs/cpu_test_program.asm`, once hand-computing branch/jump
       offsets for a real test program got error-prone (caught a real
       operand-order bug in the `.asm` source this way — see
-      `instruction_memory.vhd`'s module-map entry); replaced
-      `instruction_memory.vhd`'s Step-4 placeholder with the assembled
-      32-instruction program; discovered and documented the `IoEnable`
-      same-timestamp glitch and the "sample once per cycle" rule (section 4)
-      that both `cpu_tb.vhd` and the future `cpu_sieve_tb.vhd` need.
-      Verified `make sim TB=Cpu_tb` passes, and re-ran the full regression
-      (all 14 testbenches) clean.
+      `instruction_memory.vhd`'s module-map entry); discovered and
+      documented the `IoEnable` same-timestamp glitch and the "sample once
+      per cycle" rule (section 4) that both `cpu_tb.vhd` and the future
+      `cpu_sieve_tb.vhd` need. **Also went through several iterations on
+      how a compiled program actually gets into `InstructionMemory`**
+      before landing on the generic-based, testbench-only-loading design —
+      see section 2b for the final shape and, importantly, the list of
+      specific alternatives already tried and ruled out (hardcoded
+      constant, file I/O inside the hardware description, one VHDL package
+      per program, a custom array type, a `ProgramLoader` hardware
+      component) so nobody re-attempts one of those later. `Instructions`
+      is no longer hardcoded in `instruction_memory.vhd` at all —
+      `tools/assemble_sieve.py` now only emits plain machine code (no
+      VHDL), and `program_loader_pkg.vhd` (the one package in this project)
+      provides the loading function every testbench calls. Verified `make
+      sim TB=Cpu_tb`, `make sim TB=InstructionMemory_tb`, and `make sim
+      TB=Alu32InstructionMemoryIntegrationTb` all pass with the final
+      design, and re-ran the full regression (all 14 testbenches) clean.
 - [ ] **Step 9** — `tools/assemble_sieve.py` (already built at Step 8;
-      this step is now just "run it against Appendix 3") + `sieve_program_pkg.vhd`
-- [ ] **Step 10** — `cpu_sieve_tb.vhd` full integration test vs. golden prime list
+      this step is now just "run it against Appendix 3") produces
+      `tools/programs/sieve_program.bin` — **no VHDL package needed**
+      (section 2b already ruled that out; ignore any earlier mention of
+      `sieve_program_pkg.vhd`, which is obsolete)
+- [ ] **Step 10** — `cpu_sieve_tb.vhd` full integration test vs. golden
+      prime list, loading `sieve_program.bin` via the same
+      `ProgramLoaderPkg.LoadProgramFromFile` call `cpu_tb.vhd` already uses

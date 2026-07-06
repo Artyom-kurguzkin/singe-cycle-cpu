@@ -1,6 +1,7 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+use work.ProgramLoaderPkg.ALL;
 
 -- Integration testbench: previews the "fetch the next instruction"
 -- interaction that the real PC unit (Step 7) and InstructionMemory will
@@ -16,8 +17,9 @@ use IEEE.NUMERIC_STD.ALL;
 --
 -- Modelled sequence: starting at address 0, repeatedly compute
 -- CurrentAddress + 1 through the real ALU and fetch through the real
--- instruction memory, checking that addresses 0, 1, 2 come back in order
--- with the exact placeholder words instruction_memory.vhd stores there.
+-- instruction memory (loaded here with the same test program cpu_tb.vhd
+-- uses -- see this file's own "loader" constant below), checking that
+-- addresses 0, 1, 2 come back in order with the expected words.
 entity Alu32InstructionMemoryIntegrationTb is
 end Alu32InstructionMemoryIntegrationTb;
 
@@ -34,11 +36,20 @@ architecture Behavioral of Alu32InstructionMemoryIntegrationTb is
     end component;
 
     component InstructionMemory is
+        Generic (
+            ProgramData : STD_LOGIC_VECTOR (32767 downto 0)
+        );
         Port (
             Address        : in  STD_LOGIC_VECTOR (9 downto 0);
             InstructionOut : out STD_LOGIC_VECTOR (31 downto 0)
         );
     end component;
+
+    -- Loaded once, here, at elaboration -- this testbench plays the
+    -- "loader" role (see cpu_tb.vhd's header comment), since
+    -- InstructionMemory's ProgramData generic has no default.
+    constant TestProgram : STD_LOGIC_VECTOR (32767 downto 0) :=
+        LoadProgramFromFile("tools/programs/cpu_test_program.bin");
 
     signal Clock          : STD_LOGIC := '0';
     signal StopClock      : BOOLEAN := false;
@@ -80,6 +91,9 @@ begin
         );
 
     InstructionMemoryUnderTest: InstructionMemory
+        generic map (
+            ProgramData => TestProgram
+        )
         port map (
             Address        => CurrentAddress,
             InstructionOut => FetchedInstruction

@@ -18,7 +18,21 @@ use IEEE.NUMERIC_STD.ALL;
 -- convention (section 0b) -- this is a fixed external interface dictated
 -- by the assignment, not a name this project gets to choose, the same
 -- exception already carved out for wiring to fixed component interfaces.
+-- ProgramData is a generic, not a port -- generics are elaboration-time
+-- parameters, not physical pins, so adding one doesn't violate the
+-- spec-mandated port list, and (see instruction_memory.vhd's header
+-- comment) a generic is also the hardware-honest way to model a ROM's
+-- fixed-at-elaboration contents. This just forwards straight through to
+-- the internal InstructionMemory instance's own ProgramData generic:
+-- whatever instantiates Cpu -- a testbench, playing the role a
+-- firmware/OS loader would play in a real system -- decides which
+-- compiled program actually runs, by calling
+-- ProgramLoaderPkg.LoadProgramFromFile itself (see program_loader_pkg.vhd)
+-- and passing the result in. Cpu never reads a file itself.
 entity Cpu is
+    Generic (
+        ProgramData : STD_LOGIC_VECTOR (32767 downto 0)
+    );
     Port (
         -- The CPU's single clock. There is no reset pin (per spec) -- the
         -- PC register and RegisterFile/DataMemory's contents all get their
@@ -43,6 +57,9 @@ end Cpu;
 architecture Structural of Cpu is
 
     component InstructionMemory is
+        Generic (
+            ProgramData : STD_LOGIC_VECTOR (32767 downto 0)
+        );
         Port (
             Address        : in  STD_LOGIC_VECTOR (9 downto 0);
             InstructionOut : out STD_LOGIC_VECTOR (31 downto 0)
@@ -182,9 +199,15 @@ architecture Structural of Cpu is
 begin
 
     ------------------------------------------------------------------
-    -- Fetch: read the instruction at the current PC.
+    -- Fetch: read the instruction at the current PC. ProgramData is
+    -- forwarded straight from this entity's own generic -- no file
+    -- reading happens anywhere in this hardware description; see
+    -- program_loader_pkg.vhd for that (testbench-only) concern.
     ------------------------------------------------------------------
     InstructionMemoryInstance: InstructionMemory
+        generic map (
+            ProgramData => ProgramData
+        )
         port map (
             Address        => ProgramCounter,
             InstructionOut => FetchedInstruction

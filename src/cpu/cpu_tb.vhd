@@ -1,17 +1,24 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+use work.ProgramLoaderPkg.ALL;
 
--- Full-CPU integration test: runs the hand-assembled test program baked
--- into instruction_memory.vhd (source: tools/programs/cpu_test_program.asm,
--- see that file and instruction_memory.vhd's comments for exactly what it
--- does) on a real Cpu instance, and verifies the outcome purely by
--- observing the CPU's external clk/ioaddress/iodata/ioenable ports -- the
--- only ports cpu.vhd exposes, matching the spec exactly. No internal
--- signal access, no debug ports: this is exactly the same verification
--- technique cpu_sieve_tb.vhd (Step 10) will need for the real sieve
--- program, since the spec's own mechanism for observing CPU results is
--- "transmitted from a memory mapped IO port."
+-- Full-CPU integration test: runs the hand-assembled test program (source:
+-- tools/programs/cpu_test_program.asm, compiled machine code:
+-- tools/programs/cpu_test_program.bin) on a real Cpu instance, and verifies
+-- the outcome purely by observing the CPU's external
+-- clk/ioaddress/iodata/ioenable ports -- the only ports cpu.vhd exposes,
+-- matching the spec exactly. No internal signal access, no debug ports:
+-- this is exactly the same verification technique cpu_sieve_tb.vhd (Step
+-- 10) will need for the real sieve program, since the spec's own mechanism
+-- for observing CPU results is "transmitted from a memory mapped IO port."
+--
+-- This testbench is also the "loader": it calls
+-- ProgramLoaderPkg.LoadProgramFromFile itself and supplies the resulting
+-- data via Cpu's ProgramData generic -- the same role firmware/an OS
+-- loader plays in a real system, deciding what a ROM actually runs.
+-- Neither cpu.vhd nor instruction_memory.vhd ever read a file themselves --
+-- that would be non-synthesizable hardware; only testbenches do this.
 --
 -- The test program's tail stores ten registers out to IO addresses
 -- 128-137, one per store instruction, in a fixed order (see
@@ -28,6 +35,9 @@ end Cpu_tb;
 architecture Behavioral of Cpu_tb is
 
     component Cpu is
+        Generic (
+            ProgramData : STD_LOGIC_VECTOR (32767 downto 0)
+        );
         Port (
             clk       : in  STD_LOGIC;
             ioaddress : out STD_LOGIC_VECTOR (7 downto 0);
@@ -35,6 +45,11 @@ architecture Behavioral of Cpu_tb is
             ioenable  : out STD_LOGIC
         );
     end component;
+
+    -- Loaded once, here, at elaboration -- this is the "firmware/loader"
+    -- decision of which compiled program the CPU actually runs.
+    constant TestProgram : STD_LOGIC_VECTOR (32767 downto 0) :=
+        LoadProgramFromFile("tools/programs/cpu_test_program.bin");
 
     signal Clock     : STD_LOGIC := '0';
     signal StopClock : BOOLEAN := false;
@@ -83,6 +98,9 @@ architecture Behavioral of Cpu_tb is
 begin
 
     UnitUnderTest: Cpu
+        generic map (
+            ProgramData => TestProgram
+        )
         port map (
             clk       => Clock,
             ioaddress => IoAddress,

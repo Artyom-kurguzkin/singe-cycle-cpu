@@ -19,13 +19,18 @@ Source syntax (matches Appendix 3's style):
     beq/bne/jump accept either a `#label` or a raw signed integer for their
     branch-offset/address operand.
 
-Produces two output files:
+Produces two output files, both plain machine code -- this tool never emits
+VHDL or any other HDL source; turning assembled machine code into something
+a testbench can load is a separate concern (see
+src/instruction_memory/program_loader_pkg.vhd, called explicitly by
+whatever testbench decides which program to run -- cpu_tb.vhd today, the
+same role firmware/an OS loader plays in a real system deciding what a ROM
+actually runs):
   1. A human-readable binary listing: each instruction's fields (opcode,
      rs, rt, rd/immediate, funct, unused, as appropriate for its format)
      space-separated and grouped, annotated with the original source line.
-  2. A VHDL constant array (`constant Instructions : InstructionArrayType
-     := (...)`) -- the actual machine-consumable form this project's
-     instruction_memory.vhd / sieve_program_pkg.vhd embeds directly.
+  2. A plain machine-code file: one instruction per line, each line exactly
+     32 characters of '0'/'1', nothing else -- the actual compiled binary.
 """
 
 import argparse
@@ -286,18 +291,16 @@ def write_binary_listing(path, encoded_instructions):
             )
 
 
-def write_vhdl_constant_array(path, encoded_instructions, array_name):
+def write_machine_code(path, encoded_instructions):
+    """Emits the actual compiled binary: one line per instruction, each
+    line exactly 32 characters of '0'/'1', in address order, nothing else
+    -- no comments, no VHDL, no field separators (that's what the
+    human-readable listing is for). This is the file
+    program_loader_pkg.vhd's LoadProgramFromFile reads."""
+
     with open(path, "w") as output_file:
-        output_file.write(
-            f"    constant {array_name} : InstructionArrayType := (\n"
-        )
-        for instruction, word in encoded_instructions:
-            output_file.write(
-                f'        {instruction.address:<3} => x"{word:08X}", '
-                f"-- {instruction.source_line}\n"
-            )
-        output_file.write("        others => NopInstruction\n")
-        output_file.write("    );\n")
+        for _, word in encoded_instructions:
+            output_file.write(f"{word:032b}\n")
 
 
 def assemble(source_lines):
@@ -316,12 +319,7 @@ def main():
         "--binary-out", required=True, help="output path for the human-readable binary listing"
     )
     parser.add_argument(
-        "--vhdl-out", required=True, help="output path for the VHDL constant array"
-    )
-    parser.add_argument(
-        "--array-name",
-        default="Instructions",
-        help="VHDL constant name to emit (default: Instructions)",
+        "--bits-out", required=True, help="output path for the plain machine-code file"
     )
     arguments = parser.parse_args()
 
@@ -335,12 +333,12 @@ def main():
         sys.exit(1)
 
     write_binary_listing(arguments.binary_out, encoded_instructions)
-    write_vhdl_constant_array(arguments.vhdl_out, encoded_instructions, arguments.array_name)
+    write_machine_code(arguments.bits_out, encoded_instructions)
 
     print(
         f"assembled {len(encoded_instructions)} instructions from {arguments.source}\n"
         f"  binary listing -> {arguments.binary_out}\n"
-        f"  VHDL constant  -> {arguments.vhdl_out}"
+        f"  machine code   -> {arguments.bits_out}"
     )
 
 

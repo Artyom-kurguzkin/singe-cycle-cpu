@@ -3,7 +3,16 @@ SRCDIR  := src
 WAVEDIR := waves
 WORKDIR := work
 
-VHDL_FILES := $(shell find $(SRCDIR) -name '*.vhd' -not -path '$(SRCDIR)/example/*')
+# program_loader_pkg.vhd must be analyzed before anything that `use`s it
+# (VHDL package analysis is order-dependent, unlike component-instantiated
+# entities, which only bind at elaboration) -- listed explicitly first
+# rather than relying on find's alphabetical default, which would put
+# several consuming testbenches ahead of it.
+PKG_FILES := src/instruction_memory/program_loader_pkg.vhd
+
+OTHER_VHDL_FILES := $(filter-out $(PKG_FILES), $(shell find $(SRCDIR) -name '*.vhd' -not -path '$(SRCDIR)/example/*'))
+
+VHDL_FILES := $(PKG_FILES) $(OTHER_VHDL_FILES)
 
 .PHONY: analyze sim clean
 

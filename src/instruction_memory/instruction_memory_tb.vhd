@@ -1,16 +1,23 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+use work.ProgramLoaderPkg.ALL;
 
 -- Directed testbench for InstructionMemory. Since this is a plain ROM with
 -- no write port, there is nothing to test except "does reading a given
 -- address return exactly what's stored there" -- this spot-checks a few of
 -- the hand-assembled test program's known addresses (see
--- instruction_memory.vhd for the full program and cpu_tb.vhd for the test
--- that actually exercises it end-to-end) plus one address that was
--- deliberately left to the "others => NopInstruction" default, to prove
--- that fallback actually applies to in-range addresses that weren't
--- explicitly listed.
+-- tools/programs/cpu_test_program.asm for the full program and cpu_tb.vhd
+-- for the test that actually exercises it end-to-end) plus one address
+-- that was deliberately left unfilled, to prove the loader's nop-fill
+-- default (ProgramLoaderPkg.LoadProgramFromFile) actually applies to
+-- in-range addresses the program file didn't provide.
+--
+-- This testbench plays the "loader" role itself (see program_loader_pkg.vhd
+-- and cpu_tb.vhd's header comment on why that's entirely a testbench
+-- concern, never something InstructionMemory or cpu.vhd do themselves): it
+-- calls LoadProgramFromFile directly and supplies the result via
+-- InstructionMemory's ProgramData generic, which has no default.
 entity InstructionMemory_tb is
 end InstructionMemory_tb;
 
@@ -19,11 +26,18 @@ architecture Behavioral of InstructionMemory_tb is
     -- Re-declare the unit under test's interface so this testbench can
     -- instantiate it below.
     component InstructionMemory is
+        Generic (
+            ProgramData : STD_LOGIC_VECTOR (32767 downto 0)
+        );
         Port (
             Address        : in  STD_LOGIC_VECTOR (9 downto 0);
             InstructionOut : out STD_LOGIC_VECTOR (31 downto 0)
         );
     end component;
+
+    -- Loaded once, here, at elaboration.
+    constant TestProgram : STD_LOGIC_VECTOR (32767 downto 0) :=
+        LoadProgramFromFile("tools/programs/cpu_test_program.bin");
 
     signal Address        : STD_LOGIC_VECTOR (9 downto 0) := (others => '0');
     signal InstructionOut : STD_LOGIC_VECTOR (31 downto 0);
@@ -34,6 +48,9 @@ begin
     -- above so the stimulus process can drive Address and check
     -- InstructionOut.
     UnitUnderTest: InstructionMemory
+        generic map (
+            ProgramData => TestProgram
+        )
         port map (
             Address        => Address,
             InstructionOut => InstructionOut
@@ -67,7 +84,7 @@ begin
 
         -- ---- Address 500 (an unlisted address) ----
         -- Well past the 32-instruction program, so this must fall through
-        -- to the "others => NopInstruction" default.
+        -- to the loader's nop-fill default.
         Address <= std_logic_vector(to_unsigned(500, 10));
         wait for 10 ns;
         assert InstructionOut = x"FC000000"
