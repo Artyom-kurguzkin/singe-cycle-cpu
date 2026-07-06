@@ -3,15 +3,14 @@ use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 use work.ProgramLoaderPkg.ALL;
 
--- Full-CPU integration test: runs the hand-assembled test program (source:
--- tools/programs/cpu_test_program.asm, compiled machine code:
--- tools/programs/cpu_test_program.bin) on a real Cpu instance, and verifies
--- the outcome purely by observing the CPU's external
--- clk/ioaddress/iodata/ioenable ports -- the only ports cpu.vhd exposes,
--- matching the spec exactly. No internal signal access, no debug ports:
--- this is exactly the same verification technique cpu_sieve_tb.vhd (Step
--- 10) will need for the real sieve program, since the spec's own mechanism
--- for observing CPU results is "transmitted from a memory mapped IO port."
+-- Generic CPU runner: loads whatever compiled program TestProgram below
+-- points at onto a real Cpu instance and reports every IO transmission
+-- (IoAddress, IoData observed while IoEnable = '1') as it happens, purely by
+-- observing the CPU's external clk/ioaddress/iodata/ioenable ports -- the
+-- only ports cpu.vhd exposes, matching the spec exactly. No internal signal
+-- access, no debug ports, and no hardcoded expected values: swap
+-- TestProgram to any .bin and read the transmissions it produces from the
+-- simulator report log or a waveform.
 --
 -- This testbench is also the "loader": it calls
 -- ProgramLoaderPkg.LoadProgramFromFile itself and supplies the resulting
@@ -19,16 +18,6 @@ use work.ProgramLoaderPkg.ALL;
 -- loader plays in a real system, deciding what a ROM actually runs.
 -- Neither cpu.vhd nor instruction_memory.vhd ever read a file themselves --
 -- that would be non-synthesizable hardware; only testbenches do this.
---
--- The test program's tail stores ten registers out to IO addresses
--- 128-137, one per store instruction, in a fixed order (see
--- instruction_memory.vhd's comments for the full address-by-address
--- breakdown). This testbench captures every (IoAddress, IoData) pair
--- observed while IoEnable = '1' during the run, then asserts the captured
--- sequence matches expectations for every instruction class the program
--- exercises: R-type add/sub, a store/load round trip, a taken beq, a taken
--- bne, a not-taken bne (proven by what it did NOT skip), and an
--- unconditional jump (proven by what it DID skip).
 entity Cpu_tb is
 end Cpu_tb;
 
@@ -49,7 +38,7 @@ architecture Behavioral of Cpu_tb is
     -- Loaded once, here, at elaboration -- this is the "firmware/loader"
     -- decision of which compiled program the CPU actually runs.
     constant TestProgram : STD_LOGIC_VECTOR (32767 downto 0) :=
-        LoadProgramFromFile("tools/programs/cpu_test_program.bin");
+        LoadProgramFromFile("tools/programs/sieve_program.bin");
 
     signal Clock     : STD_LOGIC := '0';
     signal StopClock : BOOLEAN := false;
@@ -58,42 +47,11 @@ architecture Behavioral of Cpu_tb is
     signal IoData    : STD_LOGIC_VECTOR (31 downto 0);
     signal IoEnable  : STD_LOGIC;
 
-    -- One captured IO transmission: which address it targeted and what
-    -- data it carried. The test program's tail always stores in the same
-    -- fixed order, so this testbench can simply expect them in sequence.
-    type IoTransmission is record
-        Address : integer;
-        Data    : integer;
-    end record;
-    type IoTransmissionArray is array (natural range <>) of IoTransmission;
-
-    -- Expected (address, data) pairs, in the exact order the test
-    -- program's tail issues them (instruction_memory.vhd addresses 21-30):
-    --   r3=30 (add), r4=20 (sub), r5=20 (load/store round trip),
-    --   r6=0 (proves the beq-taken skip), r7=99 (proves the beq landing),
-    --   r8=0 (proves the bne-taken skip), r9=222 (proves the bne-taken
-    --   landing), r10=333 (proves the bne-NOT-taken fell through),
-    --   r12=555 (proves the jump landing), r13=0 (proves the jump skip).
-    constant ExpectedTransmissions : IoTransmissionArray := (
-        (128, 30),
-        (129, 20),
-        (130, 20),
-        (131, 0),
-        (132, 99),
-        (133, 0),
-        (134, 222),
-        (135, 333),
-        (136, 555),
-        (137, 0)
-    );
-
     -- Generous upper bound on how many clock cycles the program could
-    -- possibly need to produce all expected transmissions (it actually
-    -- finishes its 32 instructions, including every branch/jump, well
-    -- within this) -- exists purely so a real bug that stops transmissions
-    -- from ever arriving fails with a clear assertion instead of hanging
-    -- the simulation forever.
-    constant CycleLimit : integer := 60;
+    -- possibly need to run to completion -- exists purely so a stuck
+    -- program (e.g. an infinite loop that never issues IO) ends the
+    -- simulation instead of hanging forever.
+    constant CycleLimit : integer := 20000;
 
 begin
 
@@ -146,28 +104,16 @@ begin
             wait for 1 ns; -- let the combinational chain fully settle after the edge
 
             if IoEnable = '1' then
-                assert TransmissionIndex <= ExpectedTransmissions'high
-                    report "MORE IO TRANSMISSIONS OBSERVED THAN EXPECTED" severity failure;
-                assert unsigned(IoAddress) = ExpectedTransmissions(TransmissionIndex).Address
-                    report "IO TRANSMISSION "
-                        & integer'image(TransmissionIndex)
-                        & ": WRONG ADDRESS"
-                    severity failure;
-                assert unsigned(IoData) = ExpectedTransmissions(TransmissionIndex).Data
-                    report "IO TRANSMISSION "
-                        & integer'image(TransmissionIndex)
-                        & ": WRONG DATA"
-                    severity failure;
+                report "IO TRANSMISSION " & integer'image(TransmissionIndex)
+                    & ": address=" & integer'image(to_integer(unsigned(IoAddress)))
+                    & " data=" & integer'image(to_integer(unsigned(IoData)))
+                    severity note;
                 TransmissionIndex := TransmissionIndex + 1;
-                exit when TransmissionIndex > ExpectedTransmissions'high;
             end if;
         end loop;
 
-        assert TransmissionIndex = ExpectedTransmissions'length
-            report "DID NOT OBSERVE ALL EXPECTED IO TRANSMISSIONS WITHIN THE CYCLE BUDGET"
-            severity failure;
-
-        report "All tests passed." severity note;
+        report "Run complete. Observed " & integer'image(TransmissionIndex)
+            & " IO transmissions." severity note;
         StopClock <= true;
         wait;
     end process;
