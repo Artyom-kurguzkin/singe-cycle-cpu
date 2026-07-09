@@ -1,12 +1,9 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 
--- Truth-table style testbench for ControlUnit: one assert block per
--- instruction from the ISA table (docs/cpu-implementation-plan.md section
--- 1), checking every control output against what that instruction actually
--- needs. R-type is checked with a few different FunctionCode values to
--- confirm AluOpCode really does pass FunctionCode straight through
--- unmodified, rather than just happening to match for one funct value.
+-- Truth-table testbench for ControlUnit: one assert block per instruction,
+-- checking every control output. R-type is checked with several
+-- FunctionCode values to confirm AluOpCode passes it straight through.
 entity ControlUnit_tb is
 end ControlUnit_tb;
 

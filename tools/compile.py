@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Two-pass assembler for this project's CPU instruction set.
 
-Reads a `.asm` source file (see docs/cpu-implementation-plan.md section 1
-for the ISA and docs/cpu-implementation-plan.md section 2 for resolved
-per-mnemonic operand-order ambiguities -- this assembler encodes each
-mnemonic by its documented semantic role, not with one generic parser, for
-exactly the reason section 2 flags: load's assembly text lists
-(dest, addr, imm) while store's lists (addr, data, imm)).
+Each mnemonic is encoded by its own documented operand order rather than
+one generic parser, since `load` lists (dest, addr, imm) while `store`
+lists (addr, data, imm).
 
-Source syntax (matches Appendix 3's style):
+Source syntax:
   - Comments: `--` to end of line.
   - Blank lines: ignored.
   - Labels: a line consisting of `#name` marks the *next* instruction's
@@ -19,15 +16,8 @@ Source syntax (matches Appendix 3's style):
     beq/bne/jump accept either a `#label` or a raw signed integer for their
     branch-offset/address operand.
 
-Produces two output files, both plain machine code -- this tool never emits
-VHDL or any other HDL source; turning assembled machine code into something
-a testbench can load is a separate concern (see
-src/instruction_memory/program_loader_pkg.vhd, called explicitly by
-whatever testbench decides which program to run -- cpu_tb.vhd today, the
-same role firmware/an OS loader plays in a real system deciding what a ROM
-actually runs):
-  1. A human-readable binary listing: each instruction's fields (opcode,
-     rs, rt, rd/immediate, funct, unused, as appropriate for its format)
+Produces two plain machine-code output files (never VHDL or other HDL):
+  1. A human-readable binary listing: each instruction's fields
      space-separated and grouped, annotated with the original source line.
   2. A plain machine-code file: one instruction per line, each line exactly
      32 characters of '0'/'1', nothing else -- the actual compiled binary.
@@ -165,8 +155,7 @@ def resolve_branch_target(operand, current_address, labels, line_number):
     if not -512 <= offset <= 511:
         raise AssemblyError(
             line_number,
-            f"branch offset {offset} does not fit in the 10-bit signed field "
-            "(-512 to 511) -- pc_unit.vhd only ever reads immediate(9 downto 0)",
+            f"branch offset {offset} does not fit in the 10-bit signed field (-512 to 511)",
         )
     return offset
 
@@ -190,11 +179,9 @@ def encode_instruction(instruction, labels):
     address = instruction.address
 
     if mnemonic in R_TYPE_FUNCT:
-        # This ISA's assembler follows Appendix 3's own convention of
-        # always writing three register operands for R-type mnemonics
-        # (rs, rt, rd), in that literal order -- even for funct codes like
-        # `not`/`lbs`/`inc` that only semantically use one or two of them
-        # (Appendix 3 itself writes e.g. "inc r2 r2 r2" this way).
+        # Always three register operands (rs, rt, rd), even for funct
+        # codes like `not`/`lbs`/`inc` that only use one or two of them
+        # (e.g. "inc r2 r2 r2").
         if len(operands) != 3:
             raise AssemblyError(line_number, f"'{mnemonic}' expects 3 register operands (rs rt rd)")
         rs = parse_register(operands[0], line_number)
@@ -210,8 +197,7 @@ def encode_instruction(instruction, labels):
         return encode_i_type(0x22, 0, rt, immediate, line_number)
 
     if mnemonic == "load":
-        # Text order is (dest, addr, imm) -- section 2's documented
-        # asymmetry versus `store` below.
+        # Text order is (dest, addr, imm) -- opposite of `store` below.
         if len(operands) != 3:
             raise AssemblyError(line_number, "'load' expects (rt, rs, immediate)")
         rt = parse_register(operands[0], line_number)
@@ -220,8 +206,7 @@ def encode_instruction(instruction, labels):
         return encode_i_type(0x23, rs, rt, immediate, line_number)
 
     if mnemonic == "store":
-        # Text order is (addr, data, imm) -- section 2's documented
-        # asymmetry versus `load` above.
+        # Text order is (addr, data, imm) -- opposite of `load` above.
         if len(operands) != 3:
             raise AssemblyError(line_number, "'store' expects (rs, rt, immediate)")
         rs = parse_register(operands[0], line_number)

@@ -2,11 +2,10 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- Directed testbench for PcUnit: sequential advance (including the
--- wraparound edge case at the top of the address range), a taken branch in
--- both directions (forward and backward -- backward is what a real loop's
--- branch does), a not-taken branch (falls through to sequential instead),
--- and a jump (which overrides everything else).
+-- Directed testbench for PcUnit: sequential advance (including wraparound
+-- at the top of the address range), a taken branch both directions
+-- (forward and backward/looping), a not-taken branch (falls through), and
+-- a jump (overrides everything else).
 entity PcUnit_tb is
 end PcUnit_tb;
 

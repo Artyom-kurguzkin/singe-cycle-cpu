@@ -2,82 +2,38 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- RegisterFile is the CPU's 16-register scratch storage (r0-r15). Per the
--- spec it needs to support two simultaneous reads and one write per cycle:
--- "Dual read port - single write port, 32-bit wide register bank containing
--- 16 registers." A single-cycle instruction like `add rd, rs, rt` needs
--- both rs and rt available in the same cycle it decodes the instruction
--- (hence two read ports, both async/combinational -- no clock delay before
--- the values are usable), while only ever writing back to one destination
--- register per instruction (hence a single, clocked write port). Note this
--- ISA does not hardwire r0 to zero the way real MIPS does -- Appendix 3's
--- assembly program explicitly does `load immediate r0 0` to put a zero into
--- r0 itself, so r0 must behave as an ordinary read/write register here.
+-- 16-register file (r0-r15): dual async read port + single sync write port.
+-- r0 is an ordinary read/write register, not hardwired to zero.
 entity RegisterFile is
     Port (
-        -- Drives the single write port below. Reads are asynchronous and
-        -- do not depend on the clock at all -- see the ReadData1/ReadData2
-        -- assignments at the bottom of this file.
         Clock                : in  STD_LOGIC;
 
-        -- Selects which two registers to read this cycle -- typically the
-        -- instruction's rs and rt fields. 4 bits wide because there are
-        -- 16 registers (2^4 = 16).
+        -- Register numbers to read this cycle (e.g. rs/rt).
         ReadRegisterAddress1 : in  STD_LOGIC_VECTOR (3 downto 0);
         ReadRegisterAddress2 : in  STD_LOGIC_VECTOR (3 downto 0);
 
-        -- The two registers' current values, exposed combinationally (see
-        -- below) so the rest of the datapath can use them within the same
-        -- cycle without waiting for a clock edge.
-        -- Defaulted to zero (rather than left undriven) purely so that at
-        -- simulation time 0, before the concurrent assignments below have
-        -- evaluated even once, these ports already reflect a defined value
-        -- instead of 'U' -- otherwise a deep enough chain of structural
-        -- modules reading these at that very first instant (e.g. an ALU
-        -- consuming them, then a memory doing to_integer(unsigned(...)) on
-        -- something derived from the ALU's result) could transiently print
-        -- a GHDL metavalue warning before everything settles moments
-        -- later. Matches the same t=0-initializer approach used for
-        -- Registers itself.
+        -- Combinational reads; default to zero so t=0 is defined.
         ReadData1            : out STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
         ReadData2            : out STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
 
-        -- Selects which register gets written this cycle -- typically the
-        -- instruction's rd field (R-type) or rt field (load/load-immediate).
+        -- Single write port: register number, value, and enable.
         WriteRegisterAddress : in  STD_LOGIC_VECTOR (3 downto 0);
-
-        -- The 32-bit value to write into WriteRegisterAddress, captured on
-        -- the next rising clock edge if RegisterWriteEnable is asserted.
         WriteData            : in  STD_LOGIC_VECTOR (31 downto 0);
-
-        -- Write enable for the single write port. Driven by the control
-        -- unit (e.g. '0' for instructions like store/beq/bne/jump that
-        -- never write back to a register).
         RegisterWriteEnable  : in  STD_LOGIC
     );
 end RegisterFile;
 
 architecture Behavioral of RegisterFile is
 
-    -- A plain array of 16 32-bit words models the register bank itself.
-    -- Indices 0 to 15 correspond directly to register numbers r0 to r15
-    -- (matching the 4-bit register-address fields in the instruction
-    -- encoding -- see docs/cpu-implementation-plan.md section 1).
     type RegisterArrayType is array (0 to 15) of STD_LOGIC_VECTOR (31 downto 0);
 
-    -- Initialised to all zeros at simulation start (t=0), the same way the
-    -- rest of this simulation-only project relies on VHDL signal
-    -- initializers instead of an explicit reset pin (there is no reset port
-    -- in this CPU's spec).
+    -- Zeroed at t=0 (no reset pin on this CPU).
     signal Registers : RegisterArrayType := (others => (others => '0'));
 
 begin
 
-    -- The single write port: synchronous (clocked), so a register's value
-    -- only ever changes on a rising clock edge, and only when
-    -- RegisterWriteEnable is asserted that cycle. Using
-    -- to_integer(unsigned(...)) converts the 4-bit address vector into a
-    -- plain integer 0-15 so it can index into the Registers array.
+    -- Synchronous write: latches WriteData into WriteRegisterAddress on the
+    -- rising edge, only when RegisterWriteEnable = '1'.
     WritePort: process (Clock)
     begin
         if rising_edge(Clock) then
@@ -87,12 +43,7 @@ begin
         end if;
     end process;
 
-    -- The two read ports: plain concurrent signal assignments, not
-    -- inside any process or clocked in any way, which is what makes them
-    -- asynchronous -- ReadData1/ReadData2 update immediately whenever
-    -- ReadRegisterAddress1/2 change, with no clock edge required. This is
-    -- what lets both operands of an instruction be read out in the same
-    -- cycle the instruction is decoded.
+    -- Asynchronous reads: update immediately on address change, no clock.
     ReadData1 <= Registers(to_integer(unsigned(ReadRegisterAddress1)));
     ReadData2 <= Registers(to_integer(unsigned(ReadRegisterAddress2)));
 

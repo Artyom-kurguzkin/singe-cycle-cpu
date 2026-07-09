@@ -2,12 +2,10 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- Directed testbench for DataMemory. Covers: ordinary RAM read/write
--- (ignored without MemoryWriteEnable, captured on the next rising edge with
--- it), an IO-range store correctly raising IoEnable with the right
--- IoAddress/IoData, and -- the specific bug the RAM-write's
--- "IsIoAddress = '0'" guard exists to prevent -- an IO-range store *not*
--- also corrupting the RAM word at the aliased low-7-bits address.
+-- Directed testbench for DataMemory: ordinary RAM read/write (ignored
+-- without MemoryWriteEnable, captured on the next edge with it), an
+-- IO-range store correctly raising IoEnable, and confirming that same
+-- IO-range store does NOT also corrupt RAM at the aliased low-7-bits address.
 entity DataMemory_tb is
 end DataMemory_tb;
 
@@ -50,8 +48,6 @@ begin
             IoEnable          => IoEnable
         );
 
-    -- A free-running clock, needed because the RAM write port is
-    -- synchronous.
     ClockGeneration: process
     begin
         while not StopClock loop
@@ -66,10 +62,8 @@ begin
     Stimulus: process
     begin
         -- ---- RAM read of an untouched address returns zero ----
-        -- (relies on Ram's signal initializer, the same t=0-initial-value
-        -- approach used throughout this simulation-only project).
         Address <= std_logic_vector(to_unsigned(10, 8));
-        wait for 1 ns; -- let the async RAM read settle
+        wait for 1 ns;
         assert unsigned(ReadData) = 0
             report "INITIAL RAM READ NOT ZERO" severity failure;
 
@@ -82,8 +76,7 @@ begin
         assert unsigned(ReadData) = 0
             report "RAM WRITE WITHOUT ENABLE WAS CAPTURED" severity failure;
 
-        -- ---- A RAM store with MemoryWriteEnable='1' is captured and ----
-        -- ---- reads back correctly on the next cycle ----
+        -- ---- A RAM store with enable='1' is captured and reads back ----
         MemoryWriteEnable <= '1';
         wait until rising_edge(Clock);
         MemoryWriteEnable <= '0';
@@ -92,14 +85,11 @@ begin
             report "RAM WRITE-THEN-READBACK FAILED" severity failure;
 
         -- ---- An ordinary RAM-range store must not raise IoEnable ----
-        -- (address 10 is well within the 0-127 RAM half).
         assert IoEnable = '0'
             report "RAM STORE INCORRECTLY RAISED IoEnable" severity failure;
 
-        -- ---- An IO-range store raises IoEnable with the right ----
-        -- ---- IoAddress/IoData, combinationally (no clock edge needed) ----
-        -- Address 200 = 128 + 72, i.e. bit 7 set -> IO half, aliased RAM
-        -- index 72 (200 mod 128).
+        -- ---- IO-range store raises IoEnable with the right address/data ----
+        -- Address 200 = 128 + 72: bit 7 set -> IO half, aliased RAM index 72.
         Address           <= std_logic_vector(to_unsigned(200, 8));
         WriteData         <= x"12345678";
         MemoryWriteEnable <= '1';
@@ -107,12 +97,10 @@ begin
         assert IoEnable = '1' and IoAddress = std_logic_vector(to_unsigned(200, 8)) and IoData = x"12345678"
             report "IO-RANGE STORE DID NOT RAISE IoEnable CORRECTLY" severity failure;
 
-        -- ---- The same IO-range store must NOT corrupt RAM at the ----
-        -- ---- aliased address (72) ---- this is the exact bug the
-        -- IsIoAddress guard in the RAM write process exists to prevent.
+        -- ---- Same IO-range store must not corrupt RAM at aliased index 72 ----
         wait until rising_edge(Clock);
         MemoryWriteEnable <= '0';
-        Address           <= std_logic_vector(to_unsigned(72, 8)); -- a genuine RAM read of the aliased index
+        Address           <= std_logic_vector(to_unsigned(72, 8));
         wait for 1 ns;
         assert unsigned(ReadData) = 0
             report "IO-RANGE STORE INCORRECTLY WROTE THROUGH TO ALIASED RAM ADDRESS" severity failure;

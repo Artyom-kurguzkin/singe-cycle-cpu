@@ -3,27 +3,16 @@ use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
 -- Integration testbench: wires real ControlUnit, Alu32, and PcUnit
--- instances together with a clocked PC register standing in for the one
--- cpu.vhd will eventually own (the same "stand-in register, real logic"
--- approach used by alu32_instruction_memory_integration_tb.vhd for the
--- fetch-address preview in Step 4). Unlike pc_unit_tb.vhd, which drives
--- BranchEnable/BranchOnZero/ZeroFlag directly, this test derives all three
--- from a real ControlUnit decode and a real Alu32 comparison -- proving the
--- three modules cooperate correctly, not just that each one works in
--- isolation.
+-- together with a clocked PC register standing in for cpu.vhd's future
+-- one. Derives BranchEnable/BranchOnZero/ZeroFlag from a real decode and a
+-- real ALU comparison rather than driving them directly, proving the
+-- three modules cooperate.
 --
--- Modelled sequence (a tiny hand-crafted "loop, exit, jump, ordinary
--- instruction" program -- deliberately not using InstructionMemory's
--- placeholder words, since those are arbitrary bit patterns that don't
--- decode to anything meaningful; a real fetch-from-memory version of this
--- is cpu_tb.vhd's job once cpu.vhd exists in Step 8):
---   PC=5:   bne r?,r?  (operands unequal -> ZeroFlag=0 -> bne condition met)
---           branch taken, offset -2 -> PC becomes 3 (a backward loop)
---   PC=3:   bne r?,r?  (operands EQUAL -> ZeroFlag=1 -> bne condition NOT met)
---           falls through -> PC becomes 4
---   PC=4:   jump to address 100 (unconditional, overrides everything)
---           PC becomes 100
---   PC=100: add (ordinary R-type, doesn't touch PC) -> PC becomes 101
+-- Sequence (hand-crafted loop/exit/jump/ordinary-instruction program):
+--   PC=5:   bne, operands unequal -> taken, offset -2 -> PC=3 (loop back)
+--   PC=3:   bne, operands equal -> not taken -> PC=4
+--   PC=4:   jump to 100 (unconditional, overrides everything) -> PC=100
+--   PC=100: add (ordinary R-type, doesn't touch PC) -> PC=101
 entity PcUnitControlUnitAlu32IntegrationTb is
 end PcUnitControlUnitAlu32IntegrationTb;
 
@@ -73,30 +62,20 @@ architecture Behavioral of PcUnitControlUnitAlu32IntegrationTb is
     signal Clock     : STD_LOGIC := '0';
     signal StopClock : BOOLEAN := false;
 
-    -- Stands in for cpu.vhd's future PC register -- PcUnit itself has no
-    -- register (see pc_unit.vhd's header comment), so this testbench
-    -- provides the clocked storage the real top level will eventually own.
+    -- Stands in for cpu.vhd's future PC register.
     signal ProgramCounter : STD_LOGIC_VECTOR (9 downto 0) := std_logic_vector(to_unsigned(5, 10));
 
-    -- Stand-ins for instruction fields a real decoder would extract from a
-    -- fetched instruction word (same approach as every earlier integration
-    -- test in this project).
+    -- Stand-ins for instruction fields a real decoder would extract.
     signal InstructionOpCode       : STD_LOGIC_VECTOR (5 downto 0) := (others => '0');
     signal InstructionFunctionCode : STD_LOGIC_VECTOR (2 downto 0) := (others => '0');
     signal BranchImmediate         : STD_LOGIC_VECTOR (9 downto 0) := (others => '0');
     signal JumpAddress             : STD_LOGIC_VECTOR (9 downto 0) := (others => '0');
 
     -- Stand-ins for two operand registers' values, feeding Alu32 directly
-    -- (no RegisterFile needed for this narrow scope -- this test is about
-    -- PcUnit/ControlUnit/Alu32 cooperating, not the full datapath, which is
-    -- what control_unit_datapath_integration_tb.vhd from Step 6 already
-    -- covers for the non-branching instructions).
+    -- (no RegisterFile needed for this narrow scope).
     signal OperandA : STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
     signal OperandB : STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
 
-    -- ControlUnit outputs (only the ones this test actually needs are
-    -- given descriptive local names; the rest are still wired through so
-    -- the component instantiation is complete).
     signal BranchEnable : STD_LOGIC;
     signal BranchOnZero : STD_LOGIC;
     signal JumpEnable   : STD_LOGIC;
@@ -145,8 +124,6 @@ begin
             NextProgramCounter    => NextProgramCounter
         );
 
-    -- A free-running clock, needed to advance ProgramCounter the same way
-    -- a real PC register advances once per instruction.
     ClockGeneration: process
     begin
         while not StopClock loop
@@ -168,27 +145,27 @@ begin
 
     Stimulus: process
     begin
-        -- ---- PC=5: bne with unequal operands -> branch taken, offset -2 ----
+        -- ---- PC=5: bne with unequal operands -> taken, offset -2 ----
         assert unsigned(ProgramCounter) = 5
             report "INITIAL PC WAS NOT 5" severity failure;
         InstructionOpCode       <= "000100"; -- bne
         InstructionFunctionCode <= "000";
         OperandA <= std_logic_vector(to_unsigned(3, 32));
-        OperandB <= std_logic_vector(to_unsigned(7, 32)); -- unequal -> ZeroFlag=0 -> bne taken
+        OperandB <= std_logic_vector(to_unsigned(7, 32)); -- unequal -> ZeroFlag=0 -> taken
         BranchImmediate <= std_logic_vector(to_signed(-2, 10));
-        wait for 1 ns; -- let the combinational decode/ALU/PcUnit chain settle
+        wait for 1 ns;
         assert AluZeroFlag = '0'
             report "ALU DID NOT REPORT UNEQUAL OPERANDS AS NON-ZERO" severity failure;
         assert unsigned(NextProgramCounter) = 3
             report "BNE (TAKEN, BACKWARD) DID NOT COMPUTE PC=3" severity failure;
         wait until rising_edge(Clock);
 
-        -- ---- PC=3: bne with equal operands -> branch NOT taken, PC=3+1=4 ----
+        -- ---- PC=3: bne with equal operands -> not taken, PC=3+1=4 ----
         wait for 1 ns;
         assert unsigned(ProgramCounter) = 3
             report "PC DID NOT ADVANCE TO 3 AFTER THE TAKEN BRANCH" severity failure;
         OperandA <= std_logic_vector(to_unsigned(4, 32));
-        OperandB <= std_logic_vector(to_unsigned(4, 32)); -- equal -> ZeroFlag=1 -> bne NOT taken
+        OperandB <= std_logic_vector(to_unsigned(4, 32)); -- equal -> ZeroFlag=1 -> not taken
         wait for 1 ns;
         assert AluZeroFlag = '1'
             report "ALU DID NOT REPORT EQUAL OPERANDS AS ZERO" severity failure;

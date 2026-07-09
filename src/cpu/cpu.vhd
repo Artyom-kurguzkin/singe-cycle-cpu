@@ -2,52 +2,25 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- Cpu is the top-level entity: it structurally wires together every module
--- built in Steps 2-7 (Alu32, RegisterFile, InstructionMemory, DataMemory,
--- ControlUnit, PcUnit) plus the two pieces of state that don't belong to
--- any of those modules on their own -- the PC register itself, and the
--- instruction-field extraction/sign-extension logic that turns a raw
--- 32-bit fetched instruction into the individual signals every other
--- module needs. Every integration test in this project (see
--- src/integration-tests/) has already exercised these same modules
--- cooperating pairwise or in small groups; this entity is where all of
--- that finally comes together into one real, complete single-cycle CPU.
---
--- Ports are named exactly as the spec mandates (lowercase clk/ioaddress/
--- iodata/ioenable) rather than following this project's usual full-name
--- convention (section 0b) -- this is a fixed external interface dictated
--- by the assignment, not a name this project gets to choose, the same
--- exception already carved out for wiring to fixed component interfaces.
--- ProgramData is a generic, not a port -- generics are elaboration-time
--- parameters, not physical pins, so adding one doesn't violate the
--- spec-mandated port list, and (see instruction_memory.vhd's header
--- comment) a generic is also the hardware-honest way to model a ROM's
--- fixed-at-elaboration contents. This just forwards straight through to
--- the internal InstructionMemory instance's own ProgramData generic:
--- whatever instantiates Cpu -- a testbench, playing the role a
--- firmware/OS loader would play in a real system -- decides which
--- compiled program actually runs, by calling
--- ProgramLoaderPkg.LoadProgramFromFile itself (see program_loader_pkg.vhd)
--- and passing the result in. Cpu never reads a file itself.
+-- Top-level single-cycle CPU: structurally wires InstructionMemory,
+-- ControlUnit, RegisterFile, Alu32, DataMemory, and PcUnit together, plus
+-- the PC register and instruction-field extraction that don't belong to
+-- any one module.
 entity Cpu is
     Generic (
+        -- Forwarded to InstructionMemory's own ProgramData generic. Cpu
+        -- never reads a file itself; whatever instantiates it supplies
+        -- the compiled program.
         ProgramData : STD_LOGIC_VECTOR (32767 downto 0)
     );
     Port (
-        -- The CPU's single clock. There is no reset pin (per spec) -- the
-        -- PC register and RegisterFile/DataMemory's contents all get their
-        -- t=0 value from VHDL signal initializers instead, the same
-        -- simulation-only approach used throughout this project (see
-        -- docs/cpu-implementation-plan.md section 2).
+        -- No reset pin: PC/RegisterFile/DataMemory all get their t=0 value
+        -- from signal initializers.
         clk       : in  STD_LOGIC;
 
-        -- Wired straight through from DataMemory's own IoAddress/IoData/
-        -- IoEnable ports (see data_memory.vhd) -- per spec, "Your CPU
-        -- component should include ports connecting these signals to a
-        -- toplevel component, but the IO registers themselves do not need
-        -- to be implemented." Meaningful only while ioenable = '1', which
-        -- happens for exactly one clock cycle per `store` instruction that
-        -- targets the memory-mapped IO half of the address space (128-255).
+        -- Pass-through of DataMemory's IoAddress/IoData/IoEnable. Valid
+        -- for one cycle per `store` that targets the IO half (128-255) of
+        -- the address space.
         ioaddress : out STD_LOGIC_VECTOR (7 downto 0);
         iodata    : out STD_LOGIC_VECTOR (31 downto 0);
         ioenable  : out STD_LOGIC
@@ -133,24 +106,17 @@ architecture Structural of Cpu is
         );
     end component;
 
-    -- The one piece of CPU state that doesn't belong to any single module:
-    -- the program counter itself. PcUnit only computes what it should
-    -- become next (see pc_unit.vhd's header comment); this register is
-    -- what actually remembers it between cycles. Initialised to zero via a
-    -- signal initializer rather than a reset pin, per spec.
+    -- PC state: PcUnit only computes the next value, this register holds it.
     signal ProgramCounter     : STD_LOGIC_VECTOR (9 downto 0) := (others => '0');
     signal NextProgramCounter : STD_LOGIC_VECTOR (9 downto 0);
 
-    -- The instruction fetched this cycle, and the individual fields
-    -- extracted from it. Field bit positions come directly from
-    -- docs/cpu-implementation-plan.md section 1's R/I/J format tables --
-    -- note that OpCode/rs/rt occupy the same bit positions in every
-    -- format, which is exactly what lets ControlUnit start decoding
-    -- (OpCode) before the CPU even knows which format the instruction is.
+    -- Fetched instruction and its extracted fields. OpCode/rs/rt sit at
+    -- the same bit positions in every format, so decode can start on
+    -- OpCode before knowing the instruction's format.
     signal FetchedInstruction : STD_LOGIC_VECTOR (31 downto 0);
     signal InstructionOpCode  : STD_LOGIC_VECTOR (5 downto 0);
     signal RsField            : STD_LOGIC_VECTOR (3 downto 0);
-    signal RtField            : STD_LOGIC_VECTOR (3 downto 0);
+    signal RtField             : STD_LOGIC_VECTOR (3 downto 0);
     signal RdField            : STD_LOGIC_VECTOR (3 downto 0); -- R-format only
     signal FunctionCode       : STD_LOGIC_VECTOR (2 downto 0); -- R-format only
     signal RawImmediate       : STD_LOGIC_VECTOR (15 downto 0); -- I-format only
@@ -169,40 +135,31 @@ architecture Structural of Cpu is
     signal JumpEnable   : STD_LOGIC;
     signal DecodedAluOpCode : STD_LOGIC_VECTOR (2 downto 0);
 
-    -- RegisterFile's read outputs and its write-side muxes.
+    -- RegisterFile's read outputs and write-side muxes.
     signal RegisterReadData1    : STD_LOGIC_VECTOR (31 downto 0);
     signal RegisterReadData2    : STD_LOGIC_VECTOR (31 downto 0);
     signal WriteRegisterAddress : STD_LOGIC_VECTOR (3 downto 0);
     signal RegisterWriteDataMux : STD_LOGIC_VECTOR (31 downto 0);
 
-    -- The immediate field, extended to 32 bits both ways -- see
-    -- control_unit.vhd's header comment (note 2) for why `load immediate`
-    -- needs zero-extension while `load`/`store` address calculation needs
-    -- sign-extension, and why ImmediateZeroExtend is what picks between
-    -- them here.
+    -- Immediate field, extended both ways; ImmediateZeroExtend picks.
     signal SignExtendedImmediate : STD_LOGIC_VECTOR (31 downto 0);
     signal ZeroExtendedImmediate : STD_LOGIC_VECTOR (31 downto 0);
     signal AluImmediateOperand   : STD_LOGIC_VECTOR (31 downto 0);
 
-    -- Alu32's actual operands (after the AluOperandAZero / AluSourceSelect
-    -- muxes) and its outputs.
+    -- Alu32's actual operands (post-mux) and outputs.
     signal AluOperandA : STD_LOGIC_VECTOR (31 downto 0);
     signal AluOperandB : STD_LOGIC_VECTOR (31 downto 0);
     signal AluResult   : STD_LOGIC_VECTOR (31 downto 0);
     signal AluZeroFlag : STD_LOGIC;
 
-    -- DataMemory's address (truncated from the ALU's 32-bit result down to
-    -- the 8-bit address bus -- addresses only span 0-255) and read output.
+    -- DataMemory's address (ALU result truncated to 8 bits) and read data.
     signal MemoryAddress  : STD_LOGIC_VECTOR (7 downto 0);
     signal MemoryReadData : STD_LOGIC_VECTOR (31 downto 0);
 
 begin
 
     ------------------------------------------------------------------
-    -- Fetch: read the instruction at the current PC. ProgramData is
-    -- forwarded straight from this entity's own generic -- no file
-    -- reading happens anywhere in this hardware description; see
-    -- program_loader_pkg.vhd for that (testbench-only) concern.
+    -- Fetch
     ------------------------------------------------------------------
     InstructionMemoryInstance: InstructionMemory
         generic map (
@@ -214,13 +171,9 @@ begin
         );
 
     ------------------------------------------------------------------
-    -- Decode: split the fetched word into its fields. OpCode/rs/rt sit at
-    -- the same bit positions regardless of format; rd/FunctionCode
-    -- (R-format), RawImmediate (I-format), and JumpAddressField (J-format)
-    -- are only meaningful for instructions that actually use that format,
-    -- but extracting them unconditionally is harmless -- whichever ones
-    -- don't apply to the current instruction are simply never selected by
-    -- any downstream mux.
+    -- Decode: split the fetched word into fields. Fields unused by the
+    -- current instruction's format are extracted anyway (harmless; no
+    -- downstream mux selects them) and fed to ControlUnit.
     ------------------------------------------------------------------
     InstructionOpCode <= FetchedInstruction(31 downto 26);
     RsField           <= FetchedInstruction(25 downto 22);
@@ -248,10 +201,8 @@ begin
         );
 
     ------------------------------------------------------------------
-    -- Register read: rs/rt are read every cycle regardless of instruction
-    -- type (harmless for instructions that don't need them, e.g. `jump`).
-    -- The write side is set up here but only actually commits on the next
-    -- rising edge, and only when ControlRegisterWriteEnable is asserted.
+    -- Register read/write. Write side is set up here but only commits on
+    -- the next rising edge, gated by ControlRegisterWriteEnable.
     ------------------------------------------------------------------
     WriteRegisterAddress <= RdField when RegisterDestinationSelect = '1' else RtField;
     RegisterWriteDataMux <= MemoryReadData when MemoryToRegisterSelect = '1' else AluResult;
@@ -269,8 +220,7 @@ begin
         );
 
     ------------------------------------------------------------------
-    -- Execute: sign/zero-extend the immediate, mux the ALU's operands, and
-    -- run the ALU.
+    -- Execute: extend the immediate, mux the ALU's operands, run the ALU.
     ------------------------------------------------------------------
     SignExtendedImmediate <= std_logic_vector(resize(signed(RawImmediate), 32));
     ZeroExtendedImmediate <= std_logic_vector(resize(unsigned(RawImmediate), 32));
@@ -289,11 +239,8 @@ begin
         );
 
     ------------------------------------------------------------------
-    -- Memory: address comes from the ALU result (rs + immediate); the
-    -- value written is always rt (only meaningful when
-    -- ControlMemoryWriteEnable = '1', i.e. an actual `store`).
-    -- IoAddress/IoData/IoEnable are wired straight through to this
-    -- entity's own ioaddress/iodata/ioenable ports.
+    -- Memory: address = ALU result (rs + immediate); value written is
+    -- always rt, only meaningful when ControlMemoryWriteEnable = '1'.
     ------------------------------------------------------------------
     MemoryAddress <= AluResult(7 downto 0);
 
@@ -310,11 +257,8 @@ begin
         );
 
     ------------------------------------------------------------------
-    -- Next PC: compute what the PC should become, then latch it on the
-    -- next rising edge. BranchImmediate is the low 10 bits of the 16-bit
-    -- immediate field, per the ISA table's beq/bne semantics ("pc +=
-    -- sign_extend(immediate(9 downto 0))") -- PcUnit does that
-    -- sign-extension itself internally.
+    -- Next PC. BranchImmediate is the low 10 bits of the 16-bit immediate;
+    -- PcUnit sign-extends it internally.
     ------------------------------------------------------------------
     PcUnitInstance: PcUnit
         port map (

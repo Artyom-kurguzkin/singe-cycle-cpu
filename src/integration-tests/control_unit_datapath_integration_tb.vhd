@@ -2,24 +2,16 @@ library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 
--- Integration testbench: wires a real ControlUnit together with real
--- RegisterFile, Alu32, and DataMemory instances (no mocking of any of
--- them) and drives it with hand-picked OpCode/FunctionCode/register-field
--- values standing in for actual decoded instructions -- this is the full
--- non-branching, non-jumping single-cycle datapath, missing only PcUnit
--- (Step 7) and the instruction-field extraction cpu.vhd will eventually do
--- (RsField/RtField/RdField/ImmediateValue are driven directly here, the
--- same stand-in approach used by every earlier integration test in this
--- project).
+-- Integration testbench: wires a real ControlUnit with real RegisterFile,
+-- Alu32, and DataMemory, driven by hand-picked OpCode/FunctionCode/
+-- register-field values standing in for decoded instructions. Covers the
+-- full non-branching, non-jumping datapath (no PcUnit or instruction-field
+-- extraction yet).
 --
--- The most important case below is `load immediate`: it specifically
--- proves the AluOperandAZero signal this project's control_unit.vhd added
--- beyond the plan's original sketch (see that file's header comment) is
--- actually necessary -- by first seeding the instruction's (unused, per
--- the ISA) rs field with a nonzero garbage value, then confirming the
--- write-back result is still exactly the immediate, unaffected by that
--- garbage. Without AluOperandAZero forcing the ALU's first operand to
--- zero, this case would silently compute "garbage + immediate" instead.
+-- The key case is `load immediate`: it seeds the instruction's (ISA-unused)
+-- rs field with nonzero garbage, then confirms the write-back result is
+-- still exactly the immediate -- proving AluOperandAZero actually forces
+-- the ALU's first operand to zero rather than leaking rs's value through.
 entity ControlUnitDatapathIntegrationTb is
 end ControlUnitDatapathIntegrationTb;
 
@@ -82,8 +74,7 @@ architecture Behavioral of ControlUnitDatapathIntegrationTb is
     signal Clock     : STD_LOGIC := '0';
     signal StopClock : BOOLEAN := false;
 
-    -- Stand-ins for instruction fields a real instruction decoder (inside
-    -- cpu.vhd, eventually) would extract from the 32-bit instruction word.
+    -- Stand-ins for fields a real instruction decoder would extract.
     signal RsField        : STD_LOGIC_VECTOR (3 downto 0) := (others => '0');
     signal RtField        : STD_LOGIC_VECTOR (3 downto 0) := (others => '0');
     signal RdField        : STD_LOGIC_VECTOR (3 downto 0) := (others => '0');
@@ -91,7 +82,6 @@ architecture Behavioral of ControlUnitDatapathIntegrationTb is
     signal InstructionOpCode       : STD_LOGIC_VECTOR (5 downto 0) := (others => '0');
     signal InstructionFunctionCode : STD_LOGIC_VECTOR (2 downto 0) := (others => '0');
 
-    -- ControlUnit outputs.
     signal RegisterDestinationSelect : STD_LOGIC;
     signal AluSourceSelect           : STD_LOGIC;
     signal AluOperandAZero           : STD_LOGIC;
@@ -103,32 +93,25 @@ architecture Behavioral of ControlUnitDatapathIntegrationTb is
     signal JumpEnable   : STD_LOGIC;
     signal DecodedAluOpCode : STD_LOGIC_VECTOR (2 downto 0);
 
-    -- RegisterFile signals.
     signal RegisterReadData1    : STD_LOGIC_VECTOR (31 downto 0);
     signal RegisterReadData2    : STD_LOGIC_VECTOR (31 downto 0);
     signal WriteRegisterAddress : STD_LOGIC_VECTOR (3 downto 0);
     signal RegisterWriteDataMux : STD_LOGIC_VECTOR (31 downto 0);
 
-    -- Raw (bypassing ControlUnit) register-file write signals, used only to
-    -- seed initial register values -- the same "seed" approach used by
-    -- every earlier integration test in this project, since a seed isn't a
-    -- real instruction being decoded.
+    -- Raw register-file write signals used only to seed initial values,
+    -- bypassing ControlUnit (a seed isn't a real decoded instruction).
     signal SeedWriteRegisterAddress : STD_LOGIC_VECTOR (3 downto 0) := (others => '0');
     signal SeedWriteData            : STD_LOGIC_VECTOR (31 downto 0) := (others => '0');
     signal SeedWriteEnable          : STD_LOGIC := '0';
 
-    -- Selects between a real decoded instruction's write (via ControlUnit)
-    -- and a raw seed write, since both share the one register file write
-    -- port. Held '1' during the seed steps at the start of the stimulus
-    -- process, '0' for every decoded-instruction step afterwards.
+    -- '1' during seed writes, '0' for decoded-instruction steps -- both
+    -- share the one register-file write port.
     signal UseSeedWrite : STD_LOGIC := '1';
 
-    -- Alu32 signals.
     signal AluOperandA : STD_LOGIC_VECTOR (31 downto 0);
     signal AluOperandB : STD_LOGIC_VECTOR (31 downto 0);
     signal AluResult   : STD_LOGIC_VECTOR (31 downto 0);
 
-    -- DataMemory signals.
     signal MemoryAddress  : STD_LOGIC_VECTOR (7 downto 0);
     signal MemoryReadData : STD_LOGIC_VECTOR (31 downto 0);
 
@@ -140,7 +123,7 @@ begin
             FunctionCode              => InstructionFunctionCode,
             RegisterDestinationSelect => RegisterDestinationSelect,
             AluSourceSelect           => AluSourceSelect,
-            ImmediateZeroExtend       => open, -- this test drives ImmediateValue pre-extended already
+            ImmediateZeroExtend       => open, -- ImmediateValue is driven pre-extended
             AluOperandAZero           => AluOperandAZero,
             MemoryToRegisterSelect    => MemoryToRegisterSelect,
             RegisterWriteEnable       => ControlRegisterWriteEnable,
@@ -151,13 +134,11 @@ begin
             AluOpCode                 => DecodedAluOpCode
         );
 
-    -- RegDst mux: picks rd (R-type) or rt (I-type writers) as the write
-    -- destination, unless a raw seed write is in progress.
+    -- RegDst mux, with a seed-write override.
     WriteRegisterAddress <= SeedWriteRegisterAddress when UseSeedWrite = '1' else
                             RdField when RegisterDestinationSelect = '1' else RtField;
 
-    -- MemToReg mux: picks DataMemory's read data or the ALU's result as the
-    -- value actually written back, unless a raw seed write is in progress.
+    -- MemToReg mux, with a seed-write override.
     RegisterWriteDataMux <= SeedWriteData when UseSeedWrite = '1' else
                             MemoryReadData when MemoryToRegisterSelect = '1' else AluResult;
 
@@ -173,10 +154,7 @@ begin
             RegisterWriteEnable  => (SeedWriteEnable or (ControlRegisterWriteEnable and not UseSeedWrite))
         );
 
-    -- AluOperandAZero mux: forces zero for load-immediate; otherwise rs.
     AluOperandA <= (others => '0') when AluOperandAZero = '1' else RegisterReadData1;
-
-    -- ALUSrc mux: immediate for load-immediate/load/store; otherwise rt.
     AluOperandB <= ImmediateValue when AluSourceSelect = '1' else RegisterReadData2;
 
     Alu32UnderTest: Alu32
@@ -202,8 +180,6 @@ begin
             IoEnable          => open
         );
 
-    -- A free-running clock, needed because both RegisterFile's and
-    -- DataMemory's write ports are synchronous.
     ClockGeneration: process
     begin
         while not StopClock loop
@@ -217,7 +193,7 @@ begin
 
     Stimulus: process
     begin
-        -- ---- Seed r1 = 5, r2 = 7 (for the R-type add case below) ----
+        -- ---- Seed r1=5, r2=7 (for the R-type add case) ----
         UseSeedWrite <= '1';
         SeedWriteRegisterAddress <= std_logic_vector(to_unsigned(1, 4));
         SeedWriteData            <= std_logic_vector(to_unsigned(5, 32));
@@ -227,13 +203,13 @@ begin
         SeedWriteData            <= std_logic_vector(to_unsigned(7, 32));
         wait until rising_edge(Clock);
 
-        -- ---- Seed r5 with nonzero garbage (the load-immediate case's ----
-        -- ---- rs field will point here, and must be ignored) ----
+        -- ---- Seed r5 with nonzero garbage (load-immediate's rs points ----
+        -- ---- here and must ignore it) ----
         SeedWriteRegisterAddress <= std_logic_vector(to_unsigned(5, 4));
         SeedWriteData            <= x"BADBADBA";
         wait until rising_edge(Clock);
 
-        -- ---- Seed r7 = 20 (base address), r8 = 0xCAFE (store data) ----
+        -- ---- Seed r7=20 (base address), r8=0xCAFE (store data) ----
         SeedWriteRegisterAddress <= std_logic_vector(to_unsigned(7, 4));
         SeedWriteData            <= std_logic_vector(to_unsigned(20, 32));
         wait until rising_edge(Clock);
@@ -243,14 +219,13 @@ begin
         SeedWriteEnable <= '0';
         UseSeedWrite    <= '0';
 
-        -- ---- Decoded instruction 1: add r3, r1, r2 (mimics "add r1 r2 r3": ----
-        -- ---- rs=r1, rt=r2, rd=r3, per this ISA's rs/rt/rd field order) ----
+        -- ---- add r3, r1, r2 ----
         InstructionOpCode       <= "000000";
         InstructionFunctionCode <= "000"; -- add
         RsField <= std_logic_vector(to_unsigned(1, 4));
         RtField <= std_logic_vector(to_unsigned(2, 4));
         RdField <= std_logic_vector(to_unsigned(3, 4));
-        wait for 1 ns; -- let the whole combinational chain settle
+        wait for 1 ns;
         assert unsigned(AluResult) = 12
             report "CONTROL-DRIVEN ADD PRODUCED WRONG ALU RESULT" severity failure;
         wait until rising_edge(Clock);
@@ -260,10 +235,9 @@ begin
         assert unsigned(RegisterReadData1) = 12
             report "CONTROL-DRIVEN ADD WRITE-BACK FAILED" severity failure;
 
-        -- ---- Decoded instruction 2: load immediate r6, 0x1234, with ----
-        -- ---- rs=r5 (the garbage-seeded register) in the unused rs field ----
+        -- ---- load immediate r6, 0x1234, with rs=r5 (garbage-seeded) ----
         InstructionOpCode       <= "100010";
-        InstructionFunctionCode <= "000"; -- don't-care for I-type
+        InstructionFunctionCode <= "000";
         RsField <= std_logic_vector(to_unsigned(5, 4)); -- garbage; must be ignored
         RtField <= std_logic_vector(to_unsigned(6, 4));
         ImmediateValue <= x"00001234";
@@ -277,8 +251,7 @@ begin
         assert RegisterReadData1 = x"00001234"
             report "CONTROL-DRIVEN LOAD IMMEDIATE WRITE-BACK FAILED" severity failure;
 
-        -- ---- Decoded instruction 3: store r8, r7, 5 (mimics "store r8 r7 5": ----
-        -- ---- address = r7 + 5 = 25, data = r8 = 0xCAFE) ----
+        -- ---- store r8, r7, 5 -> address = r7 + 5 = 25, data = r8 ----
         InstructionOpCode       <= "100001";
         InstructionFunctionCode <= "000";
         RsField <= std_logic_vector(to_unsigned(7, 4));
@@ -289,8 +262,7 @@ begin
             report "CONTROL-DRIVEN STORE ADDRESS CALC FAILED" severity failure;
         wait until rising_edge(Clock);
 
-        -- ---- Decoded instruction 4: load r9, r7, 5 (mimics "load r9 r7 5": ----
-        -- ---- reads back the exact word instruction 3 just stored) ----
+        -- ---- load r9, r7, 5 -> reads back the word just stored ----
         InstructionOpCode       <= "100011";
         InstructionFunctionCode <= "000";
         RsField <= std_logic_vector(to_unsigned(7, 4));

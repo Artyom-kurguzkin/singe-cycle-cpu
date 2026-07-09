@@ -3,23 +3,15 @@ use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
 use work.ProgramLoaderPkg.ALL;
 
--- Integration testbench: previews the "fetch the next instruction"
--- interaction that the real PC unit (Step 7) and InstructionMemory will
--- have inside cpu.vhd, using the two already-completed modules that make it
--- up -- Alu32 (computing PC + 1 via the `inc` opcode, the same way a
--- single-cycle CPU's next-PC logic does for a plain sequential instruction,
--- no branch/jump taken) and InstructionMemory (fetching whatever
--- instruction sits at the resulting address). There is no dedicated PC
--- register/pc_unit.vhd yet, so this testbench plays that role itself with
--- a plain signal, advanced on each clock edge -- once pc_unit.vhd exists,
--- this same "increment, then fetch" wiring is exactly what it will do
--- internally for the non-branch/non-jump case.
+-- Integration testbench: previews the fetch-next-instruction interaction
+-- between a PC and InstructionMemory, using a real Alu32 (computing PC + 1
+-- via `inc`) and a real InstructionMemory (fetching at the resulting
+-- address). No PC unit exists yet, so a plain signal here plays that role,
+-- advanced each clock edge.
 --
--- Modelled sequence: starting at address 0, repeatedly compute
--- CurrentAddress + 1 through the real ALU and fetch through the real
--- instruction memory (loaded here with the same test program cpu_tb.vhd
--- uses -- see this file's own "loader" constant below), checking that
--- addresses 0, 1, 2 come back in order with the expected words.
+-- Sequence: starting at address 0, repeatedly compute CurrentAddress + 1
+-- through the real ALU and fetch through the real instruction memory,
+-- checking addresses 0, 1, 2 come back in order with the expected words.
 entity Alu32InstructionMemoryIntegrationTb is
 end Alu32InstructionMemoryIntegrationTb;
 
@@ -45,47 +37,31 @@ architecture Behavioral of Alu32InstructionMemoryIntegrationTb is
         );
     end component;
 
-    -- Loaded once, here, at elaboration -- this testbench plays the
-    -- "loader" role (see cpu_tb.vhd's header comment), since
-    -- InstructionMemory's ProgramData generic has no default.
     constant TestProgram : STD_LOGIC_VECTOR (32767 downto 0) :=
         LoadProgramFromFile("tools/programs/cpu_test_program.bin");
 
     signal Clock          : STD_LOGIC := '0';
     signal StopClock      : BOOLEAN := false;
 
-    -- Stands in for the not-yet-built PC register: 10 bits wide, matching
-    -- InstructionMemory's Address width exactly (see
-    -- instruction_memory.vhd's comment on why that width was chosen).
+    -- Stands in for the not-yet-built PC register.
     signal CurrentAddress : STD_LOGIC_VECTOR (9 downto 0) := (others => '0');
 
-    -- Alu32 signals. OperandA is CurrentAddress zero-extended to 32 bits
-    -- (the ALU is always 32 bits wide regardless of what it's being used
-    -- to compute); OperandB is unused by the inc opcode so it is tied to
-    -- all zeros.
+    -- OperandA is CurrentAddress zero-extended to 32 bits; OperandB is
+    -- unused by inc, tied to zero.
     signal AluOperandA    : STD_LOGIC_VECTOR (31 downto 0);
     signal AluResult      : STD_LOGIC_VECTOR (31 downto 0);
 
-    -- The fetched instruction word, read out of InstructionMemory at
-    -- whatever address CurrentAddress currently holds.
     signal FetchedInstruction : STD_LOGIC_VECTOR (31 downto 0);
 
 begin
 
-    -- Zero-extend the 10-bit address into the ALU's 32-bit operand width.
-    -- Using resize() rather than a hand-written zero-padding literal avoids
-    -- an off-by-one in the pad width (32 - 10 = 22 zero bits -- easy to
-    -- miscount by hand, which is exactly what happened here originally).
-    -- Both widths (CurrentAddress's fixed 10 bits, the literal 32) are
-    -- compile-time constants, so this is ordinary fixed-width hardware, not
-    -- runtime-variable sizing.
     AluOperandA <= STD_LOGIC_VECTOR(resize(unsigned(CurrentAddress), 32));
 
     Alu32UnderTest: Alu32
         port map (
             OperandA => AluOperandA,
             OperandB => (others => '0'),
-            OpCode   => "111", -- inc: computes CurrentAddress + 1
+            OpCode   => "111", -- inc: CurrentAddress + 1
             Result   => AluResult,
             ZeroFlag => open
         );
@@ -99,8 +75,6 @@ begin
             InstructionOut => FetchedInstruction
         );
 
-    -- A free-running clock, needed to advance CurrentAddress the same way
-    -- a real PC register advances once per instruction.
     ClockGeneration: process
     begin
         while not StopClock loop
@@ -112,10 +86,8 @@ begin
         wait;
     end process;
 
-    -- Advances CurrentAddress to the ALU's computed "+1" result on every
-    -- rising edge -- standing in for a real PC register's clocked update,
-    -- which pc_unit.vhd + a PC register in cpu.vhd will do for real once
-    -- they exist.
+    -- Advances CurrentAddress to the ALU's "+1" result each rising edge,
+    -- standing in for a real PC register's clocked update.
     AddressAdvance: process (Clock)
     begin
         if rising_edge(Clock) then
@@ -125,19 +97,12 @@ begin
 
     Stimulus: process
     begin
-        -- ---- Address 0 (the starting address, before any clock edge) ----
-        -- Step 8 replaced instruction_memory.vhd's arbitrary
-        -- 0x11111111-style placeholder words with a real hand-assembled
-        -- test program for cpu_tb.vhd (see that file's comments) -- these
-        -- expected values were updated to match its first three
-        -- instructions, which is all this test needs (it's only checking
-        -- that sequential fetch-address advancement via a real Alu32 works,
-        -- not decoding what the instructions mean).
-        wait for 1 ns; -- let the async ALU + instruction memory settle
+        -- ---- Address 0 (starting address, before any clock edge) ----
+        wait for 1 ns;
         assert FetchedInstruction = x"88000000" -- load immediate r0, 0
             report "FETCH AT ADDRESS 0 FAILED" severity failure;
 
-        -- ---- Address 1, reached via one ALU-computed increment ----
+        -- ---- Address 1, via one ALU-computed increment ----
         wait until rising_edge(Clock);
         wait for 1 ns;
         assert unsigned(CurrentAddress) = 1
@@ -145,7 +110,7 @@ begin
         assert FetchedInstruction = x"88040028" -- load immediate r1, 10
             report "FETCH AT ADDRESS 1 FAILED" severity failure;
 
-        -- ---- Address 2, reached via a second ALU-computed increment ----
+        -- ---- Address 2, via a second ALU-computed increment ----
         wait until rising_edge(Clock);
         wait for 1 ns;
         assert unsigned(CurrentAddress) = 2
